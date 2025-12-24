@@ -1,127 +1,134 @@
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
 
-enum Operators { GET, PUT, DELETE, ERROR };
+enum class Operation { GET = 0, PUT = 1, DELETE = 2, ERROR = 3 };
 
-Operators checkValidity(const std::string &input, std::string *key, std::string *value) {
-    int i = 5;
-    if (input.substr(0, 5) == "put(\"") {
-        while (input[i] != '\"') {
-            *key += input[i];
-            i++;
-        }
-        if (input.substr(++i, 2) != ", ") {
-            return ERROR;
-        }
-        i += 3;
-        while (input[i] != '\"') {
-            *value += input[i];
-            i++;
-        }
-        if (input.substr(i, 2) != "\")") {
-            return ERROR;
-        }
-        return PUT;
+// Parse input commands like: put("key", "value"), get("key"), delete("key")
+Operation parseCommand(const std::string &input, std::string &key, std::string &value) {
+    key.clear();
+    value.clear();
 
-    } else if (input.substr(0, 5) == "get(\"") {
-        while (input[i] != '\"') {
-            *key += input[i];
-            i++;
-        }
-        if (input.substr(i, 2) != "\")") {
-            return ERROR;
-        }
-        return GET;
+    if (input.substr(0, 4) == "put(") {
+        size_t startKey = input.find('"');
+        size_t endKey = input.find('"', startKey + 1);
+        if (startKey == std::string::npos || endKey == std::string::npos)
+            return Operation::ERROR;
 
-    } else if (input.substr(0, 8) == "delete(\"") {
-        i = 8;
-        while (input[i] != '\"') {
-            *key += input[i];
-            i++;
-        }
-        if (input.substr(i, 2) != "\")") {
-            return ERROR;
-        }
-        return DELETE;
+        key = input.substr(startKey + 1, endKey - startKey - 1);
+
+        size_t startValue = input.find('"', endKey + 1);
+        size_t endValue = input.find('"', startValue + 1);
+        if (startValue == std::string::npos || endValue == std::string::npos)
+            return Operation::ERROR;
+
+        value = input.substr(startValue + 1, endValue - startValue - 1);
+        return Operation::PUT;
+
+    } else if (input.substr(0, 4) == "get(") {
+        size_t startKey = input.find('"');
+        size_t endKey = input.find('"', startKey + 1);
+        if (startKey == std::string::npos || endKey == std::string::npos)
+            return Operation::ERROR;
+
+        key = input.substr(startKey + 1, endKey - startKey - 1);
+        return Operation::GET;
+
+    } else if (input.substr(0, 7) == "delete(") {
+        size_t startKey = input.find('"');
+        size_t endKey = input.find('"', startKey + 1);
+        if (startKey == std::string::npos || endKey == std::string::npos)
+            return Operation::ERROR;
+
+        key = input.substr(startKey + 1, endKey - startKey - 1);
+        return Operation::DELETE;
     }
-    return ERROR;
+
+    return Operation::ERROR;
 }
 
-void writeLog(Operators op, const std::string &key, const std::string &value) {
-    std::ofstream outputFile("log.txt", std::ios::app);
-
-    if (!outputFile.is_open()) {
-        std::cerr << "Error: Could not open the file." << std::endl;
+void writeLog(Operation op, const std::string &key, const std::string &value) {
+    std::ofstream logFile("log.txt", std::ios::app);
+    if (!logFile) {
+        std::cerr << "Failed to open log file!" << std::endl;
         return;
     }
-    outputFile << op << " " << key << " " << value << std::endl;
-    outputFile.close();
-    std::cout << "Data written to log.txt successfully." << std::endl;
+
+    // Format: op "key" "value"
+    logFile << static_cast<int>(op) << " \"" << key << "\" \"" << value << "\"\n";
 }
 
-void loadLog(const std::string &fileName, std::map<std::string, std::string> *memtable) {
-    std::ifstream inputFile(fileName);
-
-    if (!inputFile.is_open()) {
-        std::cerr << "Error: Could not open the file " << fileName << std::endl;
+// Load log and rebuild memtable
+void loadLog(const std::string &fileName, std::map<std::string, std::string> &memtable) {
+    std::ifstream logFile(fileName);
+    if (!logFile)
         return;
-    }
+
     std::string line;
-    while (std::getline(inputFile, line)) {
-        Operators op = static_cast<Operators>(line[0] - '0');
-        std::istringstream iss(line.substr(2));
+    while (std::getline(logFile, line)) {
+        std::istringstream iss(line);
+        int opInt;
+        char quote;
+
+        if (!(iss >> opInt >> quote) || quote != '"')
+            continue;
+
         std::string key;
+        if (!std::getline(iss, key, '"'))
+            continue;
+
+        if (!(iss >> quote) || quote != '"')
+            continue;
+
         std::string value;
+        if (!std::getline(iss, value, '"'))
+            continue;
 
-        iss >> key;
-        std::getline(iss, value);
-
-        if (op == PUT) {
-            (*memtable)[key] = value;
-        } else if (op == DELETE) {
-            (*memtable).erase(key);
+        Operation op = static_cast<Operation>(opInt);
+        if (op == Operation::PUT) {
+            memtable[key] = value;
+        } else if (op == Operation::DELETE) {
+            memtable.erase(key);
         }
     }
 }
 
 int main() {
-    const std::string logPath = "log.txt";
     std::map<std::string, std::string> memtable;
-    std::string input;
-    loadLog(logPath, &memtable);
-    while (true) {
-        std::string key;
-        std::string value;
-        std::cout << "> ";
-        std::getline(std::cin, input, '\n');
-        Operators result = checkValidity(input, &key, &value);
-        if (result != ERROR && result != GET) {
-            writeLog(result, key, value);
-        }
+    loadLog("log.txt", memtable);
 
-        switch (result) {
-        case (GET):
-            if (memtable.find(key) != memtable.end()) {
+    std::string input;
+    while (true) {
+        std::cout << "> ";
+        std::getline(std::cin, input);
+
+        std::string key, value;
+        Operation op = parseCommand(input, key, value);
+
+        switch (op) {
+        case Operation::GET:
+            if (memtable.find(key) != memtable.end())
                 std::cout << memtable[key] << std::endl;
-            } else {
-                std::cout << "That key does not exist" << std::endl;
-            }
+            else
+                std::cout << "Key not found" << std::endl;
             break;
 
-        case (PUT):
+        case Operation::PUT:
+            writeLog(op, key, value);
             memtable[key] = value;
             break;
 
-        case (DELETE):
+        case Operation::DELETE:
+            writeLog(op, key, value);
             memtable.erase(key);
             break;
 
-        case (ERROR):
-            std::cerr << "There was an error." << std::endl;
-            break;
+        case Operation::ERROR:
+        default:
+            std::cerr << "Invalid command" << std::endl;
         }
     }
 }
