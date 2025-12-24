@@ -18,7 +18,15 @@ $(TARGET): $(OBJ)
 run: $(TARGET)
 	./build/$(TARGET)
 
+check:
+	@command -v cppcheck >/dev/null 2>&1 || { echo "cppcheck not installed. Please install it."; exit 1; }
+	cppcheck --enable=all --inconclusive --std=c++17 \
+		--suppress=missingIncludeSystem \
+		--suppress=normalCheckLevelMaxBranches \
+		--suppress=checkersReport \
+		$(SRC)
+
 clean:
 	rm -rf build
 
-.PHONY: all run clean build
+.PHONY: all run clean build check
