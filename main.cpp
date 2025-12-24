@@ -35,10 +35,10 @@ uint32_t calculateChecksum(Operation op, const std::string &key, const std::stri
     std::memcpy(buffer + offset, value.data(), valueLen);
     offset += valueLen;
 
-    std::cout << "Total data bytes in buffer: " << offset << std::endl;
+    // std::cout << "Total data bytes in buffer: " << offset << std::endl;
 
     uint32_t crc = crc32(0L, buffer, offset);
-    std::cout << "CRC32: 0x" << crc << std::endl;
+    // std::cout << "CRC32: 0x" << crc << std::endl;
 
     delete[] buffer;
     return crc;
@@ -92,8 +92,6 @@ void writeLog(Operation op, const std::string &key, const std::string &value) {
     uint32_t checksum = calculateChecksum(op, key, value);
     uint16_t keyLen = key.size();
     uint16_t valueLen = value.size();
-    uint16_t keyLenBytes = key.size();
-    uint16_t valueLenBytes = value.size();
     uint8_t opByte = static_cast<uint8_t>(op);
     const char *keyBytes = key.data();
     const char *valueBytes = value.data();
@@ -106,14 +104,43 @@ void writeLog(Operation op, const std::string &key, const std::string &value) {
 
     logFile.write(reinterpret_cast<const char *>(&checksum), sizeof(checksum));
     logFile.write(reinterpret_cast<const char *>(&opByte), sizeof(opByte));
-    logFile.write(reinterpret_cast<const char *>(&keyLenBytes), sizeof(keyLenBytes));
-    logFile.write(reinterpret_cast<const char *>(&valueLenBytes), sizeof(valueLenBytes));
+    logFile.write(reinterpret_cast<const char *>(&keyLen), sizeof(keyLen));
+    logFile.write(reinterpret_cast<const char *>(&valueLen), sizeof(valueLen));
     logFile.write(keyBytes, keyLen);
     logFile.write(valueBytes, valueLen);
 }
 
+void doOperation(Operation op, std::string &key, const std::string &value, std::map<std::string, std::string> &memtable,
+                 bool shouldWriteLog = true) {
+    switch (op) {
+    case Operation::PUT:
+        memtable[key] = value;
+        if (shouldWriteLog)
+            writeLog(op, key, value);
+        break;
+    case Operation::DELETE:
+        if (memtable.contains(key)) {
+            memtable.erase(key);
+            if (shouldWriteLog)
+                writeLog(op, key, value);
+        } else {
+            std::cerr << "Key does not exist." << std::endl;
+        }
+        break;
+    case Operation::GET:
+        if (memtable.contains(key)) {
+            std::cout << memtable[key] << std::endl;
+        } else {
+            std::cout << "Key not found\n";
+        }
+        break;
+    default:
+        std::cerr << "Invalid command" << std::endl;
+    }
+}
+
 // Load log and rebuild memtable
-void loadLog(const std::string &fileName, const std::map<std::string, std::string> &memtable) {
+void loadLog(const std::string &fileName, std::map<std::string, std::string> &memtable) {
     std::ifstream inputFile(fileName, std::ios::in | std::ios::binary);
 
     if (!inputFile) {
@@ -145,12 +172,19 @@ void loadLog(const std::string &fileName, const std::map<std::string, std::strin
         inputFile.read(reinterpret_cast<char *>(&key[0]), keyLen);
         inputFile.read(reinterpret_cast<char *>(&value[0]), valueLen);
 
-        std::cout << checksum << std::endl;
-        std::cout << static_cast<int>(op) << std::endl;
-        std::cout << keyLen << std::endl;
-        std::cout << valueLen << std::endl;
-        std::cout << key << std::endl;
-        std::cout << value << std::endl;
+        // std::cout << checksum << std::endl;
+        // std::cout << static_cast<int>(op) << std::endl;
+        // std::cout << keyLen << std::endl;
+        // std::cout << valueLen << std::endl;
+        // std::cout << key << std::endl;
+        // std::cout << value << std::endl;
+
+        uint32_t newChecksum = calculateChecksum(op, key, value);
+        if (newChecksum == checksum) {
+            doOperation(op, key, value, memtable, false);
+        } else {
+            std::cerr << "Data has been corrupted.";
+        }
     }
 }
 
@@ -162,35 +196,11 @@ int main() {
     while (true) {
         std::cout << "> ";
 
-        std::string input;
         std::getline(std::cin, input);
 
         std::string key, value;
         Operation op = parseCommand(input, key, value);
 
-        if (op != Operation::GET && op != Operation::ERROR) {
-            writeLog(op, key, value);
-        }
-
-        switch (op) {
-        case Operation::PUT:
-            memtable[key] = value;
-            break;
-
-        case Operation::DELETE:
-            memtable.erase(key);
-            break;
-
-        case Operation::GET:
-            if (memtable.contains(key))
-                std::cout << memtable[key] << std::endl;
-            else
-                std::cout << "Key not found\n";
-            break;
-
-        case Operation::ERROR:
-        default:
-            std::cerr << "Invalid command" << std::endl;
-        }
+        doOperation(op, key, value, memtable);
     }
 }
