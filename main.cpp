@@ -73,23 +73,7 @@ Operation parseCommand(const std::string &input, std::string &key, std::string &
 
         key = input.substr(startKey + 1, endKey - startKey - 1);
         return Operation::GET;
-    } else if (input.substr(0, 4) == "get(") {
-        size_t startKey = input.find('"');
-        size_t endKey = input.find('"', startKey + 1);
-        if (startKey == std::string::npos || endKey == std::string::npos)
-            return Operation::ERROR;
 
-        key = input.substr(startKey + 1, endKey - startKey - 1);
-        return Operation::GET;
-
-    } else if (input.substr(0, 7) == "delete(") {
-        size_t startKey = input.find('"');
-        size_t endKey = input.find('"', startKey + 1);
-        if (startKey == std::string::npos || endKey == std::string::npos)
-            return Operation::ERROR;
-
-        key = input.substr(startKey + 1, endKey - startKey - 1);
-        return Operation::DELETE;
     } else if (input.substr(0, 7) == "delete(") {
         size_t startKey = input.find('"');
         size_t endKey = input.find('"', startKey + 1);
@@ -99,8 +83,6 @@ Operation parseCommand(const std::string &input, std::string &key, std::string &
         key = input.substr(startKey + 1, endKey - startKey - 1);
         return Operation::DELETE;
     }
-
-    return Operation::ERROR;
 
     return Operation::ERROR;
 }
@@ -156,12 +138,6 @@ void loadLog(const std::string &fileName, const std::map<std::string, std::strin
         uint16_t valueLen = static_cast<uint16_t>(valueLenBytes);
 
         std::string key;
-        if (!std::getline(iss, key, '"'))
-            continue;
-
-        if (!(iss >> quote) || quote != '"')
-            continue;
-
         std::string value;
         key.resize(keyLen);
         value.resize(valueLen);
@@ -185,47 +161,36 @@ int main() {
     std::string input;
     while (true) {
         std::cout << "> ";
+
+        std::string input;
         std::getline(std::cin, input);
 
         std::string key, value;
         Operation op = parseCommand(input, key, value);
-        std::getline(std::cin, input);
 
-        std::string key, value;
-        Operation op = parseCommand(input, key, value);
+        if (op != Operation::GET && op != Operation::ERROR) {
+            writeLog(op, key, value);
+        }
 
         switch (op) {
+        case Operation::PUT:
+            memtable[key] = value;
+            break;
+
+        case Operation::DELETE:
+            memtable.erase(key);
+            break;
+
         case Operation::GET:
-            if (memtable.find(key) != memtable.end())
-                switch (op) {
-                case Operation::GET:
-                    if (memtable.find(key) != memtable.end())
-                        std::cout << memtable[key] << std::endl;
-                    else
-                        std::cout << "Key not found" << std::endl;
-                    else std::cout << "Key not found" << std::endl;
-                    break;
+            if (memtable.contains(key))
+                std::cout << memtable[key] << std::endl;
+            else
+                std::cout << "Key not found\n";
+            break;
 
-                case Operation::PUT:
-                    writeLog(op, key, value);
-                case Operation::PUT:
-                    writeLog(op, key, value);
-                    memtable[key] = value;
-                    break;
-
-                case Operation::DELETE:
-                    writeLog(op, key, value);
-                case Operation::DELETE:
-                    writeLog(op, key, value);
-                    memtable.erase(key);
-                    break;
-
-                case Operation::ERROR:
-                default:
-                    std::cerr << "Invalid command" << std::endl;
-                case Operation::ERROR:
-                default:
-                    std::cerr << "Invalid command" << std::endl;
-                }
+        case Operation::ERROR:
+        default:
+            std::cerr << "Invalid command" << std::endl;
         }
     }
+}
