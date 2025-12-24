@@ -6,7 +6,7 @@
 
 enum Operators { GET, PUT, DELETE, ERROR };
 
-Operators checkValidity(std::string &input, std::string *key, std::string *value) {
+Operators checkValidity(const std::string &input, std::string *key, std::string *value) {
     int i = 5;
     if (input.substr(0, 5) == "put(\"") {
         while (input[i] != '\"') {
@@ -50,7 +50,7 @@ Operators checkValidity(std::string &input, std::string *key, std::string *value
     return ERROR;
 }
 
-void writeLog(Operators op, std::string &key, std::string &value) {
+void writeLog(Operators op, const std::string &key, const std::string &value) {
     std::ofstream outputFile("log.txt", std::ios::app);
 
     if (!outputFile.is_open()) {
