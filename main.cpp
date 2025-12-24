@@ -1,5 +1,8 @@
+#include <fstream>
 #include <iostream>
 #include <map>
+#include <sstream>
+#include <string>
 
 enum Operators { GET, PUT, DELETE, ERROR };
 
@@ -47,27 +50,78 @@ Operators checkValidity(std::string &input, std::string *key, std::string *value
     return ERROR;
 }
 
+void writeLog(Operators op, std::string &key, std::string &value) {
+    std::ofstream outputFile("log.txt", std::ios::app);
+
+    if (!outputFile.is_open()) {
+        std::cerr << "Error: Could not open the file." << std::endl;
+        return;
+    }
+    outputFile << op << " " << key << " " << value << std::endl;
+    outputFile.close();
+    std::cout << "Data written to log.txt successfully." << std::endl;
+}
+
+void loadLog(const std::string &fileName, std::map<std::string, std::string> *memtable) {
+    std::ifstream inputFile(fileName);
+
+    if (!inputFile.is_open()) {
+        std::cerr << "Error: Could not open the file " << fileName << std::endl;
+        return;
+    }
+    std::string line;
+    while (std::getline(inputFile, line)) {
+        Operators op = static_cast<Operators>(line[0] - '0');
+        std::istringstream iss(line.substr(2));
+        std::string key;
+        std::string value;
+
+        iss >> key;
+        std::getline(iss, value);
+
+        if (op == PUT) {
+            (*memtable)[key] = value;
+        } else if (op == DELETE) {
+            (*memtable).erase(key);
+        }
+    }
+}
+
 int main() {
+    const std::string logPath = "log.txt";
     std::map<std::string, std::string> memtable;
     std::string input;
+    loadLog(logPath, &memtable);
     while (true) {
         std::string key;
         std::string value;
         std::cout << "> ";
         std::getline(std::cin, input, '\n');
         Operators result = checkValidity(input, &key, &value);
-        if (result == GET) {
+        if (result != ERROR && result != GET) {
+            writeLog(result, key, value);
+        }
+
+        switch (result) {
+        case (GET):
             if (memtable.find(key) != memtable.end()) {
                 std::cout << memtable[key] << std::endl;
             } else {
                 std::cout << "That key does not exist" << std::endl;
             }
-        } else if (result == PUT) {
+            break;
+
+        case (PUT):
             memtable[key] = value;
-        } else if (result == DELETE) {
+            break;
+
+        case (DELETE):
             memtable.erase(key);
-        } else if (result == ERROR) {
-            std::cout << "There was an error." << std::endl;
+            break;
+
+        case (ERROR):
+            std::cerr << "There was an error." << std::endl;
+            break;
         }
     }
 }
