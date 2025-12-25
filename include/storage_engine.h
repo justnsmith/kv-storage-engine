@@ -15,13 +15,14 @@ class StorageEngine {
   public:
     explicit StorageEngine(const std::string &wal_path);
 
-    void put(const std::string &key, const std::string &value);
-    void del(const std::string &key);
-    void get(const std::string &key, std::string &out) const;
+    bool put(const std::string &key, const std::string &value);
+    bool del(const std::string &key);
+    bool get(const std::string &key, std::string &out) const;
     void ls() const;
     void handleCommand(const std::string &input);
 
     void recover();
+    void clearData();
 
   private:
     WriteAheadLog wal_;

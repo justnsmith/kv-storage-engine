@@ -1,13 +1,8 @@
 #include "memtable.h"
 
 bool MemTable::put(const std::string &key, const std::string &value) {
-    if (!memtable.contains(key)) {
-        std::cout << "Adding to memtable...\n";
-        memtable[key] = value;
-        return true;
-    } else {
-        return false;
-    }
+    memtable[key] = value;
+    return true;
 }
 
 bool MemTable::del(const std::string &key) {

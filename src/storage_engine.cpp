@@ -18,30 +18,44 @@ StorageEngine::StorageEngine(const std::string &wal_path) : wal_(wal_path), memt
     }
 }
 
-void StorageEngine::put(const std::string &key, const std::string &value) {
-    if (memtable_.put(key, value))
+bool StorageEngine::put(const std::string &key, const std::string &value) {
+    bool result = false;
+    if (memtable_.put(key, value)) {
         wal_.append(Operation::PUT, key, value);
+        result = true;
+    }
     std::cout << "Checking size: " << " " << memtable_.getSize() << '\n';
     checkFlush();
+    return result;
 }
 
-void StorageEngine::del(const std::string &key) {
-    if (memtable_.del(key))
+bool StorageEngine::del(const std::string &key) {
+    bool result = false;
+    if (memtable_.del(key)) {
         wal_.append(Operation::DELETE, key, "");
+        result = true;
+    }
     std::cout << "Checking size: " << " " << memtable_.getSize() << '\n';
     checkFlush();
+    return result;
 }
 
-void StorageEngine::get(const std::string &key, std::string &out) const {
+bool StorageEngine::get(const std::string &key, std::string &out) const {
+    bool result = false;
     if (!memtable_.get(key, out)) {
         for (size_t i = sstables_.size(); i-- > 0;) {
-            std::optional<std::string> result = sstables_[i].get(key);
-            if (result != std::nullopt) {
-                out = *result;
-                return;
+            std::optional<std::string> sstableResult = sstables_[i].get(key);
+            if (sstableResult != std::nullopt) {
+                std::cout << "here\n";
+                out = *sstableResult;
+                result = true;
+                return result;
             }
         }
+    } else {
+        result = true;
     }
+    return result;
 }
 
 void StorageEngine::ls() const {
@@ -127,5 +141,20 @@ void StorageEngine::checkFlush() {
         metadataFile << flush_counter_;
 
         memtable_.clear();
+    }
+}
+
+void StorageEngine::clearData() {
+    std::filesystem::path dataPath = "data";
+
+    try {
+        if (std::filesystem::remove_all(dataPath) > 0) {
+            memtable_.clear();
+            std::cout << "Memory successfuly cleared" << std::endl;
+        } else {
+            std::cout << "The folder was not found or something went wrong." << std::endl;
+        }
+    } catch (const std::filesystem::filesystem_error &e) {
+        std::cerr << "Filesystem error: " << e.what() << std::endl;
     }
 }

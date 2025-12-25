@@ -46,6 +46,9 @@ void WriteAheadLog::append(Operation op, const std::string &key, const std::stri
     const char *keyBytes = key.data();
     const char *valueBytes = value.data();
 
+    std::filesystem::path p(path_);
+    std::filesystem::create_directories(p.parent_path());
+
     std::ofstream logFile(path_, std::ios::app | std::ios::binary);
     if (!logFile) {
         std::cerr << "Failed to open log file" << std::endl;
