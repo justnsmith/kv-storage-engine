@@ -3,12 +3,21 @@ CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -O2 -Iinclude
 LDFLAGS := -lz
 
 TARGET := main
+TEST_TARGET := test_storage_engine
+
 BUILD_DIR := build
 SRC_DIR := src
+TEST_DIR := tests
 
-# Automatically find all .cpp files in src/
+# Source files
 SRCS := $(wildcard $(SRC_DIR)/*.cpp)
 OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
+
+# Exclude main.o for tests
+LIB_OBJS := $(filter-out $(BUILD_DIR)/main.o,$(OBJS))
+
+TEST_SRC := $(TEST_DIR)/test_storage_engine.cpp
+TEST_OBJ := $(BUILD_DIR)/test_storage_engine.o
 
 all: $(BUILD_DIR) $(BUILD_DIR)/$(TARGET)
 
@@ -16,17 +25,29 @@ all: $(BUILD_DIR) $(BUILD_DIR)/$(TARGET)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-# Compile each .cpp into build/*.o
+# Compile src/*.cpp → build/*.o
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Link all object files into the final executable
+# Compile tests/*.cpp → build/*.o
+$(BUILD_DIR)/%.o: $(TEST_DIR)/%.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Link main binary
 $(BUILD_DIR)/$(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LDFLAGS)
 
-# Run the program
+# Link test binary (no main.o)
+$(BUILD_DIR)/$(TEST_TARGET): $(LIB_OBJS) $(TEST_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
+# Run app
 run: all
 	./$(BUILD_DIR)/$(TARGET)
+
+# Run tests
+test: $(BUILD_DIR) $(BUILD_DIR)/$(TEST_TARGET)
+	./$(BUILD_DIR)/$(TEST_TARGET)
 
 # Static analysis
 check:
@@ -41,4 +62,4 @@ check:
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all run clean check
+.PHONY: all run test clean check
