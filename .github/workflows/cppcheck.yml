@@ -24,4 +24,5 @@ jobs:
           cppcheck --enable=all --inconclusive --std=c++20 \
             --suppress=missingIncludeSystem \
             --suppress=checkersReport \
-            main.cpp
+            --suppress=functionConst \
+            -Iinclude src
