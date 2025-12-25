@@ -38,6 +38,11 @@ Operation parseCommand(const std::string &input, std::string &key, std::string &
 
         key = input.substr(startKey + 1, endKey - startKey - 1);
         return Operation::DELETE;
+    } else if (input.substr(0, 2) == "ls") {
+        if (input.size() != 2) {
+            return Operation::ERROR;
+        }
+        return Operation::LS;
     }
 
     return Operation::ERROR;

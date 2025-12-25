@@ -44,6 +44,27 @@ void StorageEngine::get(const std::string &key, std::string &out) const {
     }
 }
 
+void StorageEngine::ls() const {
+    const std::map<std::string, std::string> currentMemtable = memtable_.snapshot();
+    if (!currentMemtable.empty()) {
+        std::cout << "Memtable:\n";
+        for (const auto &[key, value] : currentMemtable) {
+            std::cout << key << " " << value << std::endl;
+        }
+        std::cout << '\n';
+    }
+    if (!sstables_.empty()) {
+        for (size_t i = sstables_.size(); i-- > 0;) {
+            std::cout << "SSTable " << i << ":\n";
+            std::map<std::string, std::string> currSStableData = sstables_[i].getData();
+            for (const auto &[key, value] : currSStableData) {
+                std::cout << key << " " << value << std::endl;
+            }
+            std::cout << '\n';
+        }
+    }
+}
+
 void StorageEngine::recover() {
     wal_.replay([this](Operation op, const std::string &key, const std::string &value) {
         switch (op) {
@@ -73,6 +94,10 @@ void StorageEngine::handleCommand(const std::string &input) {
         std::cout << result << std::endl;
         break;
     }
+    case Operation::LS: {
+        ls();
+        break;
+    }
     case Operation::DELETE:
         del(key);
         break;
@@ -82,7 +107,7 @@ void StorageEngine::handleCommand(const std::string &input) {
 }
 
 void StorageEngine::checkFlush() {
-    static constexpr size_t kMemTableThreshold = 8 * 1024 * 1024;
+    static constexpr size_t kMemTableThreshold = 50;
     // Check if memtable is greater than 8MB
     if (memtable_.getSize() >= kMemTableThreshold) {
 

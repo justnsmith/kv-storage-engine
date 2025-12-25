@@ -23,6 +23,8 @@ class SSTable {
     // Return the filename for this SSTable
     std::string filename() const;
 
+    std::map<std::string, std::string> getData() const;
+
   private:
     std::string path_;
     std::string min_key_;

@@ -67,3 +67,37 @@ std::optional<std::string> SSTable::get(const std::string &key) const {
     }
     return std::nullopt;
 }
+
+std::map<std::string, std::string> SSTable::getData() const {
+    std::map<std::string, std::string> sstableData;
+
+    std::ifstream sstableFile(path_, std::ios::in | std::ios::binary);
+
+    if (!sstableFile) {
+        throw std::runtime_error("Failed to open SSTable file: " + path_);
+    }
+
+    uint16_t keyLenBytes{};
+    uint16_t valueLenBytes{};
+
+    while (true) {
+        if (!sstableFile.read(reinterpret_cast<char *>(&keyLenBytes), sizeof(keyLenBytes))) {
+            break;
+        }
+        sstableFile.read(reinterpret_cast<char *>(&valueLenBytes), sizeof(valueLenBytes));
+
+        uint16_t keyLen = static_cast<uint16_t>(keyLenBytes);
+        uint16_t valueLen = static_cast<uint16_t>(valueLenBytes);
+
+        std::string currKey;
+        std::string currValue;
+        currKey.resize(keyLen);
+        currValue.resize(valueLen);
+
+        sstableFile.read(reinterpret_cast<char *>(&currKey[0]), keyLen);
+        sstableFile.read(reinterpret_cast<char *>(&currValue[0]), valueLen);
+
+        sstableData[currKey] = currValue;
+    }
+    return sstableData;
+}

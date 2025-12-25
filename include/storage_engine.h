@@ -18,6 +18,7 @@ class StorageEngine {
     void put(const std::string &key, const std::string &value);
     void del(const std::string &key);
     void get(const std::string &key, std::string &out) const;
+    void ls() const;
     void handleCommand(const std::string &input);
 
     void recover();
