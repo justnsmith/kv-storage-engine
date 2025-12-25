@@ -2,10 +2,10 @@
 
 bool MemTable::put(const std::string &key, const std::string &value) {
     if (!memtable.contains(key)) {
+        std::cout << "Adding to memtable...\n";
         memtable[key] = value;
         return true;
     } else {
-        std::cerr << "Key already exists\n";
         return false;
     }
 }
@@ -15,7 +15,6 @@ bool MemTable::del(const std::string &key) {
         memtable.erase(key);
         return true;
     } else {
-        std::cerr << "Key does not exist\n";
         return false;
     }
 }
@@ -25,7 +24,26 @@ bool MemTable::get(const std::string &key, std::string &out) const {
         out = memtable.at(key);
         return true;
     } else {
-        std::cerr << "Key does not exist\n";
         return false;
     }
+}
+
+const std::map<std::string, std::string> &MemTable::snapshot() const {
+    return memtable;
+}
+
+void MemTable::clear() {
+    memtable.clear();
+}
+
+size_t MemTable::getSize() {
+    size_t total = 0;
+    const uint8_t checksumByteSize = 4;
+    const uint8_t keyLenByteSize = 2;
+    const uint8_t valueLenByteSize = 2;
+    const uint8_t opByteSize = 1;
+    for (const auto &[k, v] : memtable) {
+        total += checksumByteSize + keyLenByteSize + valueLenByteSize + opByteSize + k.size() + v.size();
+    }
+    return total;
 }

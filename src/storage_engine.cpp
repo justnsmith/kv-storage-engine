@@ -1,22 +1,47 @@
 #include "storage_engine.h"
 
 StorageEngine::StorageEngine(const std::string &wal_path) : wal_(wal_path), memtable_() {
+    std::ifstream metadataFile("data/storage_metadata.txt");
+
+    if (!metadataFile) {
+        flush_counter_ = 0;
+    } else {
+        std::string line;
+        std::getline(metadataFile, line);
+        uint64_t flush_counter = stoull(line);
+        flush_counter_ = flush_counter;
+    }
+
+    for (uint64_t i = 1; i <= flush_counter_; i++) {
+        std::string path = "data/sstables/sstable_" + std::to_string(i) + ".bin";
+        sstables_.emplace_back(path);
+    }
 }
 
 void StorageEngine::put(const std::string &key, const std::string &value) {
-    bool result = memtable_.put(key, value);
-    if (result)
+    if (memtable_.put(key, value))
         wal_.append(Operation::PUT, key, value);
+    std::cout << "Checking size: " << " " << memtable_.getSize() << '\n';
+    checkFlush();
 }
 
 void StorageEngine::del(const std::string &key) {
-    bool result = memtable_.del(key);
-    if (result)
+    if (memtable_.del(key))
         wal_.append(Operation::DELETE, key, "");
+    std::cout << "Checking size: " << " " << memtable_.getSize() << '\n';
+    checkFlush();
 }
 
 void StorageEngine::get(const std::string &key, std::string &out) const {
-    memtable_.get(key, out);
+    if (!memtable_.get(key, out)) {
+        for (size_t i = sstables_.size(); i-- > 0;) {
+            std::optional<std::string> result = sstables_[i].get(key);
+            if (result != std::nullopt) {
+                out = *result;
+                return;
+            }
+        }
+    }
 }
 
 void StorageEngine::recover() {
@@ -53,5 +78,29 @@ void StorageEngine::handleCommand(const std::string &input) {
         break;
     default:
         std::cerr << "Invalid command\n";
+    }
+}
+
+void StorageEngine::checkFlush() {
+    static constexpr size_t kMemTableThreshold = 8 * 1024 * 1024;
+    // Check if memtable is greater than 8MB
+    if (memtable_.getSize() >= kMemTableThreshold) {
+
+        std::cout << "Memtable is greater than threshold\n";
+
+        const std::map<std::string, std::string> currentMemtable = memtable_.snapshot();
+        const std::string dir_path = "data/sstables/";
+
+        flush_counter_++;
+
+        std::cout << "Flushing...\n";
+
+        SSTable newSSTable = SSTable::flush(currentMemtable, dir_path, flush_counter_);
+        sstables_.push_back(newSSTable);
+
+        std::ofstream metadataFile("data/storage_metadata.txt");
+        metadataFile << flush_counter_;
+
+        memtable_.clear();
     }
 }

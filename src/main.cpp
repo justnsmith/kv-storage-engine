@@ -1,7 +1,7 @@
 #include "storage_engine.h"
 
 int main() {
-    StorageEngine engine("log.bin");
+    StorageEngine engine("data/log.bin");
     std::string input;
     engine.recover();
     while (true) {

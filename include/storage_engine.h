@@ -3,6 +3,7 @@
 
 #include "command_parser.h"
 #include "memtable.h"
+#include "sstable.h"
 #include "types.h"
 #include "wal.h"
 #include <string>
@@ -24,6 +25,10 @@ class StorageEngine {
   private:
     WriteAheadLog wal_;
     MemTable memtable_;
+    std::vector<SSTable> sstables_;
+    uint64_t flush_counter_;
+
+    void checkFlush();
 };
 
 #endif
