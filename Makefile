@@ -2,63 +2,66 @@ CXX := g++
 CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -O2 -Iinclude
 LDFLAGS := -lz
 
-TARGET := main
-TEST_TARGET := test_storage_engine
-
 BUILD_DIR := build
 SRC_DIR := src
 TEST_DIR := tests
 
-# Source files
-SRCS := $(wildcard $(SRC_DIR)/*.cpp)
-OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
+APP := main
+TEST_APP := test_storage_engine
 
-# Exclude main.o for tests
-LIB_OBJS := $(filter-out $(BUILD_DIR)/main.o,$(OBJS))
+# Core source files (NO main.cpp)
+SRC_FILES := \
+	$(SRC_DIR)/command_parser.cpp \
+	$(SRC_DIR)/memtable.cpp \
+	$(SRC_DIR)/sstable.cpp \
+	$(SRC_DIR)/storage_engine.cpp \
+	$(SRC_DIR)/wal.cpp \
+	$(SRC_DIR)/test_framework.cpp
 
-TEST_SRC := $(TEST_DIR)/test_storage_engine.cpp
+SRC_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRC_FILES))
+
+# App + Test objects
+MAIN_OBJ := $(BUILD_DIR)/main.o
 TEST_OBJ := $(BUILD_DIR)/test_storage_engine.o
 
-all: $(BUILD_DIR) $(BUILD_DIR)/$(TARGET)
+# Default target
+all: $(BUILD_DIR) $(BUILD_DIR)/$(APP)
 
 # Ensure build directory exists
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-# Compile src/*.cpp → build/*.o
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
+# Compile rules
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Compile tests/*.cpp → build/*.o
-$(BUILD_DIR)/%.o: $(TEST_DIR)/%.cpp
+$(BUILD_DIR)/test_storage_engine.o: $(TEST_DIR)/test_storage_engine.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Link main binary
-$(BUILD_DIR)/$(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LDFLAGS)
-
-# Link test binary (no main.o)
-$(BUILD_DIR)/$(TEST_TARGET): $(LIB_OBJS) $(TEST_OBJ)
+# Link binaries
+$(BUILD_DIR)/$(APP): $(SRC_OBJS) $(MAIN_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-# Run app
-run: all
-	./$(BUILD_DIR)/$(TARGET)
+$(BUILD_DIR)/$(TEST_APP): $(SRC_OBJS) $(TEST_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-# Run tests
-test: $(BUILD_DIR) $(BUILD_DIR)/$(TEST_TARGET)
-	./$(BUILD_DIR)/$(TEST_TARGET)
+# Commands
+run: $(BUILD_DIR)/$(APP)
+	./$(BUILD_DIR)/$(APP)
 
-# Static analysis
+test: $(BUILD_DIR)/$(TEST_APP)
+	./$(BUILD_DIR)/$(TEST_APP)
+
+# Static analysis using cppcheck
 check:
 	@command -v cppcheck >/dev/null 2>&1 || { echo "cppcheck not installed."; exit 1; }
 	cppcheck --enable=all --inconclusive --std=c++20 \
 		--suppress=missingIncludeSystem \
 		--suppress=checkersReport \
 		--suppress=functionConst \
-		-Iinclude $(SRC_DIR)
+		--suppress=normalCheckLevelMaxBranches \
+		-Iinclude $(SRC_DIR) $(TEST_DIR)
 
-# Clean build artifacts
 clean:
 	rm -rf $(BUILD_DIR)
 

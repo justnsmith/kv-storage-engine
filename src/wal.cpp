@@ -29,10 +29,10 @@ uint32_t WriteAheadLog::calculateChecksum(Operation op, const std::string &key, 
     std::memcpy(buffer + offset, value.data(), valueLen);
     offset += valueLen;
 
-    std::cout << "Total data bytes in buffer: " << offset << std::endl;
+    //std::cout << "Total data bytes in buffer: " << offset << std::endl;
 
     uint32_t crc = crc32(0L, buffer, offset);
-    std::cout << "CRC32: 0x" << crc << std::endl;
+    //std::cout << "CRC32: 0x" << crc << std::endl;
 
     delete[] buffer;
     return crc;
@@ -95,12 +95,12 @@ void WriteAheadLog::replay(std::function<void(Operation, std::string &, std::str
         inputFile.read(reinterpret_cast<char *>(&key[0]), keyLen);
         inputFile.read(reinterpret_cast<char *>(&value[0]), valueLen);
 
-        std::cout << checksum << std::endl;
-        std::cout << static_cast<int>(op) << std::endl;
-        std::cout << keyLen << std::endl;
-        std::cout << valueLen << std::endl;
-        std::cout << key << std::endl;
-        std::cout << value << std::endl;
+        //std::cout << checksum << std::endl;
+        //std::cout << static_cast<int>(op) << std::endl;
+        //std::cout << keyLen << std::endl;
+        //std::cout << valueLen << std::endl;
+        //std::cout << key << std::endl;
+        //std::cout << value << std::endl;
 
         uint32_t newChecksum = calculateChecksum(op, key, value);
         if (newChecksum == checksum) {

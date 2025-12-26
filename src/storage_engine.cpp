@@ -24,7 +24,7 @@ bool StorageEngine::put(const std::string &key, const std::string &value) {
         wal_.append(Operation::PUT, key, value);
         result = true;
     }
-    std::cout << "Checking size: " << " " << memtable_.getSize() << '\n';
+    // std::cout << "Checking size: " << " " << memtable_.getSize() << '\n';
     checkFlush();
     return result;
 }
@@ -35,7 +35,7 @@ bool StorageEngine::del(const std::string &key) {
         wal_.append(Operation::DELETE, key, "");
         result = true;
     }
-    std::cout << "Checking size: " << " " << memtable_.getSize() << '\n';
+    // std::cout << "Checking size: " << " " << memtable_.getSize() << '\n';
     checkFlush();
     return result;
 }
@@ -46,7 +46,6 @@ bool StorageEngine::get(const std::string &key, std::string &out) const {
         for (size_t i = sstables_.size(); i-- > 0;) {
             std::optional<std::string> sstableResult = sstables_[i].get(key);
             if (sstableResult != std::nullopt) {
-                std::cout << "here\n";
                 out = *sstableResult;
                 result = true;
                 return result;
@@ -54,6 +53,9 @@ bool StorageEngine::get(const std::string &key, std::string &out) const {
         }
     } else {
         result = true;
+    }
+    if (result == false) {
+        std::cout << "Key does not exist";
     }
     return result;
 }
@@ -150,7 +152,7 @@ void StorageEngine::clearData() {
     try {
         if (std::filesystem::remove_all(dataPath) > 0) {
             memtable_.clear();
-            std::cout << "Memory successfuly cleared" << std::endl;
+            // std::cout << "Memory successfuly cleared" << std::endl;
         } else {
             std::cout << "The folder was not found or something went wrong." << std::endl;
         }

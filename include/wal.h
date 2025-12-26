@@ -20,4 +20,4 @@ class WriteAheadLog {
     const std::string path_;
     static uint32_t calculateChecksum(Operation op, const std::string &key, const std::string &value);
 };
-#endif;
+#endif
