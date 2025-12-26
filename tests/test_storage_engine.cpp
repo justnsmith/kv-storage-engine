@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-// Test fixture class for storage engine tests
 class StorageEngineTest {
   public:
     StorageEngineTest() : engine_("data/log.bin") {
@@ -31,7 +30,6 @@ bool test_simple_put_and_get(StorageEngineTest &fixture) {
     bool status;
     std::string result;
 
-    // Test initial put and get
     status = engine.put("user42", "123");
 
     ASSERT_TRUE(status, "PUT should succeed since adding a unique key");
@@ -48,10 +46,8 @@ bool test_update_existing_key(StorageEngineTest &fixture) {
     fixture.setUp();
     auto &engine = fixture.getEngine();
 
-    // Put initial value
     engine.put("user42", "123");
 
-    // Update value
     engine.put("user42", "new123");
 
     std::string result;
@@ -79,7 +75,6 @@ bool test_simple_delete(StorageEngineTest &fixture) {
     fixture.setUp();
     auto &engine = fixture.getEngine();
 
-    std::string result;
     engine.put("user42", "123");
 
     bool status = engine.del("user42");
@@ -88,53 +83,35 @@ bool test_simple_delete(StorageEngineTest &fixture) {
     return true;
 }
 
-bool test_memtable_persistence() {
+bool test_recovery_from_wal() {
     const std::string walPath = "data/log.bin";
 
-    std::filesystem::remove(walPath);
+    std::filesystem::remove_all("data");
 
-    WriteAheadLog wal(walPath);
-    MemTable memtable;
+    {
+        StorageEngine engine(walPath);
+        engine.put("key1", "value1");
+        engine.put("key2", "value2");
+        engine.del("key1");
+    }
 
-    memtable.put("key1", "value1");
-    wal.append(Operation::PUT, "key1", "value1");
+    {
+        StorageEngine recoveredEngine(walPath);
+        recoveredEngine.recover();
 
-    memtable.put("key2", "value2");
-    wal.append(Operation::PUT, "key2", "value2");
+        std::string out;
 
-    memtable.del("key1");
-    wal.append(Operation::DELETE, "key1", "");
-
-    memtable.clear();
-
-    MemTable recoveredMemtable;
-    wal.replay([&recoveredMemtable](Operation op, const std::string &key, const std::string &value) {
-        switch (op) {
-        case Operation::PUT:
-            recoveredMemtable.put(key, value);
-            break;
-        case Operation::DELETE:
-            recoveredMemtable.del(key);
-            break;
-        }
-    });
-
-    std::string out;
-    ASSERT_TRUE(!recoveredMemtable.get("key1", out), "key1 should be deleted");
-    ASSERT_TRUE(recoveredMemtable.get("key2", out), "key2 should exist");
-    ASSERT_EQ(out, "value2", "key2 value should match");
-
-    std::filesystem::remove(walPath);
-
+        ASSERT_TRUE(!recoveredEngine.get("key1", out), "key1 should not exist after recovery");
+        ASSERT_TRUE(recoveredEngine.get("key2", out), "key2 should exist after recovery");
+        ASSERT_EQ(out, "value2", "Recovered value should match last written value");
+    }
     return true;
 }
 
-// Main test runner
 int main() {
     TestFramework framework("StorageEngine Tests");
     StorageEngineTest fixture;
 
-    // Register and run tests
     framework.run("test_simple_put_and_get", [&]() { return test_simple_put_and_get(fixture); });
 
     framework.run("test_update_existing_key", [&]() { return test_update_existing_key(fixture); });
@@ -143,9 +120,8 @@ int main() {
 
     framework.run("test_simple_delete", [&]() { return test_simple_delete(fixture); });
 
-    framework.run("test_memtable_persistence", [&]() { return test_memtable_persistence(); });
+    framework.run("test_recovery_from_wal", [&]() { return test_recovery_from_wal(); });
 
-    // Print summary and exit
     framework.printSummary();
     return framework.exitCode();
 }
