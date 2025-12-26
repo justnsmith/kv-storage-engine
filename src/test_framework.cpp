@@ -4,22 +4,22 @@ TestFramework::TestFramework(const std::string &suite_name) : suite_name_(suite_
 }
 
 void TestFramework::run(const std::string &test_name, std::function<bool()> test_func) {
-    std::cout << Color::CYAN << "[ RUN    ] " << Color::RESET << test_name << std::endl;
+    std::cout << Color::CYAN << "[RUN] " << Color::RESET << test_name << std::endl;
 
     try {
         bool result = test_func();
 
         if (result) {
-            std::cout << Color::GREEN << "[ PASS   ] " << Color::RESET << test_name << std::endl;
+            std::cout << Color::GREEN << "[PASS] " << Color::RESET << test_name << std::endl;
             ++passed_;
             results_.push_back({test_name, true, ""});
         } else {
-            std::cout << Color::RED << "[ FAIL   ] " << Color::RESET << test_name << std::endl;
+            std::cout << Color::RED << "[FAIL] " << Color::RESET << test_name << std::endl;
             ++failed_;
             results_.push_back({test_name, false, ""});
         }
     } catch (const std::exception &e) {
-        std::cout << Color::RED << "[ ERROR  ] " << Color::RESET << test_name << ": " << e.what() << std::endl;
+        std::cout << Color::RED << "[ERROR] " << Color::RESET << test_name << ": " << e.what() << std::endl;
         ++failed_;
         results_.push_back({test_name, false, e.what()});
     }
