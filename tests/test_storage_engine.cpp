@@ -75,6 +75,60 @@ bool test_get_nonexistent_key(StorageEngineTest &fixture) {
     return true;
 }
 
+bool test_simple_delete(StorageEngineTest &fixture) {
+    fixture.setUp();
+    auto &engine = fixture.getEngine();
+
+    std::string result;
+    engine.put("user42", "123");
+
+    bool status = engine.del("user42");
+
+    ASSERT_TRUE(status, "DELETE an existing key should work");
+    return true;
+}
+
+bool test_memtable_persistence() {
+    const std::string walPath = "data/log.bin";
+
+    std::filesystem::remove(walPath);
+
+    WriteAheadLog wal(walPath);
+    MemTable memtable;
+
+    memtable.put("key1", "value1");
+    wal.append(Operation::PUT, "key1", "value1");
+
+    memtable.put("key2", "value2");
+    wal.append(Operation::PUT, "key2", "value2");
+
+    memtable.del("key1");
+    wal.append(Operation::DELETE, "key1", "");
+
+    memtable.clear();
+
+    MemTable recoveredMemtable;
+    wal.replay([&recoveredMemtable](Operation op, const std::string &key, const std::string &value) {
+        switch (op) {
+        case Operation::PUT:
+            recoveredMemtable.put(key, value);
+            break;
+        case Operation::DELETE:
+            recoveredMemtable.del(key);
+            break;
+        }
+    });
+
+    std::string out;
+    ASSERT_TRUE(!recoveredMemtable.get("key1", out), "key1 should be deleted");
+    ASSERT_TRUE(recoveredMemtable.get("key2", out), "key2 should exist");
+    ASSERT_EQ(out, "value2", "key2 value should match");
+
+    std::filesystem::remove(walPath);
+
+    return true;
+}
+
 // Main test runner
 int main() {
     TestFramework framework("StorageEngine Tests");
@@ -86,6 +140,10 @@ int main() {
     framework.run("test_update_existing_key", [&]() { return test_update_existing_key(fixture); });
 
     framework.run("test_get_nonexistent_key", [&]() { return test_get_nonexistent_key(fixture); });
+
+    framework.run("test_simple_delete", [&]() { return test_simple_delete(fixture); });
+
+    framework.run("test_memtable_persistence", [&]() { return test_memtable_persistence(); });
 
     // Print summary and exit
     framework.printSummary();
