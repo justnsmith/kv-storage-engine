@@ -54,9 +54,6 @@ bool StorageEngine::get(const std::string &key, std::string &out) const {
     } else {
         result = true;
     }
-    if (result == false) {
-        std::cout << "Key does not exist";
-    }
     return result;
 }
 
@@ -123,18 +120,18 @@ void StorageEngine::handleCommand(const std::string &input) {
 }
 
 void StorageEngine::checkFlush() {
-    static constexpr size_t kMemTableThreshold = 50;
+    static constexpr size_t kMemTableThreshold = 8 * 1024 * 1024;
     // Check if memtable is greater than 8MB
     if (memtable_.getSize() >= kMemTableThreshold) {
 
-        std::cout << "Memtable is greater than threshold\n";
+        std::cout << "DEBUG: Memtable is greater than threshold\n";
 
         const std::map<std::string, std::string> currentMemtable = memtable_.snapshot();
         const std::string dir_path = "data/sstables/";
 
         flush_counter_++;
 
-        std::cout << "Flushing...\n";
+        std::cout << "DEBUG: Flushing...\n";
 
         SSTable newSSTable = SSTable::flush(currentMemtable, dir_path, flush_counter_);
         sstables_.push_back(newSSTable);
@@ -148,13 +145,14 @@ void StorageEngine::checkFlush() {
 
 void StorageEngine::clearData() {
     std::filesystem::path dataPath = "data";
+    std::filesystem::create_directories(dataPath);
 
     try {
         if (std::filesystem::remove_all(dataPath) > 0) {
             memtable_.clear();
             // std::cout << "Memory successfuly cleared" << std::endl;
         } else {
-            std::cout << "The folder was not found or something went wrong." << std::endl;
+            std::cerr << "The folder was not found or something went wrong" << std::endl;
         }
     } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "Filesystem error: " << e.what() << std::endl;
