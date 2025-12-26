@@ -2,6 +2,9 @@
 #define WAL_H
 
 #include "types.h"
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>

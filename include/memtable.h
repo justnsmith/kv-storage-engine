@@ -5,6 +5,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <cstdint>
 
 class MemTable {
   public:

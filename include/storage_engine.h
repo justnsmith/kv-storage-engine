@@ -6,7 +6,15 @@
 #include "sstable.h"
 #include "types.h"
 #include "wal.h"
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <optional>
 #include <string>
+#include <vector>
 
 class WriteAheadLog;
 class MemTable;

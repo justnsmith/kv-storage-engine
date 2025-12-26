@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <exception>
 
 namespace Color {
 inline constexpr const char *RESET = "\033[0m";

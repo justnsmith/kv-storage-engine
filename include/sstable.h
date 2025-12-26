@@ -1,11 +1,14 @@
 #ifndef SSTABLE_H
 #define SSTABLE_H
 
+#include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 class SSTable {
