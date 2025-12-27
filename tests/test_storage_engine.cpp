@@ -108,10 +108,11 @@ bool test_recovery_from_wal() {
     return true;
 }
 
-int main() {
-    TestFramework framework("StorageEngine Tests");
+// run tests
+void run_storage_engine_tests(TestFramework &framework) {
     StorageEngineTest fixture;
-
+    std::cout << "Running Storage Engine Tests" << std::endl;
+    std::cout << "========================================" << std::endl;
     framework.run("test_simple_put_and_get", [&]() { return test_simple_put_and_get(fixture); });
 
     framework.run("test_update_existing_key", [&]() { return test_update_existing_key(fixture); });
@@ -121,7 +122,5 @@ int main() {
     framework.run("test_simple_delete", [&]() { return test_simple_delete(fixture); });
 
     framework.run("test_recovery_from_wal", [&]() { return test_recovery_from_wal(); });
-
-    framework.printSummary();
-    return framework.exitCode();
+    std::cout << "========================================" << std::endl;
 }
