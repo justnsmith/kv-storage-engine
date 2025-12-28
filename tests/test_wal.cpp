@@ -30,11 +30,11 @@ bool test_single_append_and_replay(WriteAheadLogTest &fixture) {
     fixture.setUp();
     auto &wal = fixture.wal();
 
-    wal.append(Operation::PUT, "key1", "value1");
+    wal.append(Operation::PUT, "key1", "value1", 1);
 
     std::vector<std::tuple<Operation, std::string, std::string>> applied;
 
-    wal.replay([&](Operation op, std::string &key, std::string &value) { applied.emplace_back(op, key, value); });
+    wal.replay([&](uint64_t, Operation op, std::string &key, std::string &value) { applied.emplace_back(op, key, value); });
 
     ASSERT_EQ(applied.size(), 1, "Replay should emit exactly one record");
     ASSERT_EQ(static_cast<int>(std::get<0>(applied[0])), static_cast<int>(Operation::PUT), "Operation mismatch");
@@ -48,13 +48,13 @@ bool test_multiple_records_over_preserved(WriteAheadLogTest &fixture) {
     fixture.setUp();
     auto &wal = fixture.wal();
 
-    wal.append(Operation::PUT, "a", "1");
-    wal.append(Operation::PUT, "b", "2");
-    wal.append(Operation::DELETE, "a", "");
+    wal.append(Operation::PUT, "a", "1", 1);
+    wal.append(Operation::PUT, "b", "2", 2);
+    wal.append(Operation::DELETE, "a", "", 3);
 
     std::vector<std::tuple<Operation, std::string, std::string>> applied;
 
-    wal.replay([&](Operation op, std::string &key, std::string &value) { applied.emplace_back(op, key, value); });
+    wal.replay([&](uint64_t, Operation op, std::string &key, std::string &value) { applied.emplace_back(op, key, value); });
 
     ASSERT_EQ(applied.size(), 3, "Should replay all appended records");
     ASSERT_EQ(std::get<1>(applied[0]), "a", "First key incorrect");
@@ -69,15 +69,15 @@ bool test_replay_after_restart(WriteAheadLogTest &fixture) {
 
     {
         WriteAheadLog tempWal("data/log.bin");
-        tempWal.append(Operation::PUT, "x", "10");
-        tempWal.append(Operation::PUT, "y", "20");
+        tempWal.append(Operation::PUT, "x", "10", 1);
+        tempWal.append(Operation::PUT, "y", "20", 2);
     }
 
     std::vector<std::tuple<Operation, std::string, std::string>> applied;
 
     {
         WriteAheadLog tempWal("data/log.bin");
-        tempWal.replay([&](Operation op, std::string &key, std::string &value) { applied.emplace_back(op, key, value); });
+        tempWal.replay([&](uint64_t, Operation op, std::string &key, std::string &value) { applied.emplace_back(op, key, value); });
     }
 
     ASSERT_EQ(applied.size(), 2, "Restarted WAL should replay all records");
@@ -90,7 +90,7 @@ bool test_corruption_stops_replay(WriteAheadLogTest &fixture) {
     fixture.setUp();
 
     auto &wal = fixture.wal();
-    wal.append(Operation::PUT, "key", "value");
+    wal.append(Operation::PUT, "key", "value", 1);
 
     // Corrupt the op byte (after checksum)
     std::fstream file(fixture.getPath(), std::ios::in | std::ios::out | std::ios::binary);
@@ -103,7 +103,7 @@ bool test_corruption_stops_replay(WriteAheadLogTest &fixture) {
 
     int appliedCount = 0;
 
-    wal.replay([&](Operation, std::string &, std::string &) { appliedCount++; });
+    wal.replay([&](uint64_t, Operation, std::string &, std::string &) { appliedCount++; });
 
     ASSERT_EQ(appliedCount, 0, "Corrupted record must not be applied");
 
@@ -114,14 +114,14 @@ bool test_truncated_record_not_applied(WriteAheadLogTest &fixture) {
     fixture.setUp();
 
     auto &wal = fixture.wal();
-    wal.append(Operation::PUT, "key", "value");
+    wal.append(Operation::PUT, "key", "value", 1);
 
     auto size = std::filesystem::file_size(fixture.getPath());
     std::filesystem::resize_file(fixture.getPath(), size - 2);
 
     int appliedCount = 0;
 
-    wal.replay([&](Operation, std::string &, std::string &) { appliedCount++; });
+    wal.replay([&](uint64_t, Operation, std::string &, std::string &) { appliedCount++; });
 
     ASSERT_EQ(appliedCount, 0, "Partial record must not be applied");
 
@@ -133,7 +133,7 @@ bool test_empty_wal(WriteAheadLogTest &fixture) {
 
     int appliedCount = 0;
 
-    fixture.wal().replay([&](Operation, std::string &, std::string &) { appliedCount++; });
+    fixture.wal().replay([&](uint64_t, Operation, std::string &, std::string &) { appliedCount++; });
 
     ASSERT_EQ(appliedCount, 0, "Empty WAL should replay nothing");
 

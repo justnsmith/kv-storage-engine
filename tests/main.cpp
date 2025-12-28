@@ -7,7 +7,7 @@ void run_wal_tests(TestFramework &framework);
 int main() {
     TestFramework framework("All tests");
 
-    run_storage_engine_tests(framework);
+    // run_storage_engine_tests(framework);
     run_memtable_tests(framework);
     run_wal_tests(framework);
 

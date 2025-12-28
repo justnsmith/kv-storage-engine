@@ -24,7 +24,7 @@ bool test_put_and_get(MemTableTest &fixture) {
     auto &mt = fixture.getMemTable();
     bool status;
 
-    status = mt.put("key1", "value1");
+    status = mt.put("key1", "value1", 1);
 
     ASSERT_TRUE(status, "PUT should succeed in memtable since unique key");
 
@@ -42,10 +42,10 @@ bool test_overwrite(MemTableTest &fixture) {
     auto &mt = fixture.getMemTable();
     bool status;
 
-    status = mt.put("key1", "value1");
+    status = mt.put("key1", "value1", 1);
     ASSERT_TRUE(status, "PUT should succeed");
 
-    status = mt.put("key1", "value2");
+    status = mt.put("key1", "value2", 2);
     ASSERT_TRUE(status, "PUT should succeed by updating current key with new value");
 
     std::string out;
@@ -62,7 +62,7 @@ bool test_delete(MemTableTest &fixture) {
     auto &mt = fixture.getMemTable();
     bool status;
 
-    status = mt.put("key1", "value1");
+    status = mt.put("key1", "value1", 1);
     ASSERT_TRUE(status, "PUT should succeed");
 
     status = mt.del("key1");
@@ -77,11 +77,11 @@ bool test_clear(MemTableTest &fixture) {
     fixture.setUp();
     auto &mt = fixture.getMemTable();
 
-    for (int i = 0; i < 10; i++) {
+    for (int i = 1; i <= 10; i++) {
         bool status;
         std::string key = "key" + std::to_string(i);
         std::string value = "value" + std::to_string(i);
-        status = mt.put(key, value);
+        status = mt.put(key, value, i);
         ASSERT_TRUE(status, "PUT should succeed");
     }
 
@@ -95,20 +95,20 @@ bool test_snapshot(MemTableTest &fixture) {
     auto &mt = fixture.getMemTable();
     bool status;
 
-    for (int i = 0; i < 0; i++) {
+    for (int i = 1; i <= 10; i++) {
         std::string key = "key" + std::to_string(i);
         std::string value = "value" + std::to_string(i);
-        status = mt.put(key, value);
+        status = mt.put(key, value, i);
         ASSERT_TRUE(status, "PUT should succeed");
     }
 
-    std::map<std::string, std::string> mtSnapshot = mt.snapshot();
+    std::map<std::string, Entry> mtSnapshot = mt.snapshot();
 
-    for (const auto &[key, value] : mtSnapshot) {
+    for (const auto &[k, v] : mtSnapshot) {
         std::string out;
-        status = mt.get(key, out);
+        status = mt.get(k, out);
         ASSERT_TRUE(status, "GET should succeed");
-        ASSERT_EQ(out, value, "Value in snapshot should match value in MemTable");
+        ASSERT_EQ(out, v.value, "Value in snapshot should match value in MemTable");
     }
     return true;
 }
@@ -121,10 +121,10 @@ bool test_get_size(MemTableTest &fixture) {
     std::string key = "ab";
     std::string value = "cd";
 
-    status = mt.put(key, value);
+    status = mt.put(key, value, 1);
     ASSERT_TRUE(status, "PUT should succeed");
 
-    size_t expected = 4 + 2 + 2 + 1 + key.size() + value.size();
+    size_t expected = 4 + 2 + 2 + 1 + key.size() + value.size() + 8;
 
     ASSERT_EQ(mt.getSize(), expected, "Size calculation should match format");
     return true;
