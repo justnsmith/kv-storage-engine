@@ -18,6 +18,7 @@ class WriteAheadLog {
     explicit WriteAheadLog(const std::string &path);
     void append(Operation op, const std::string &key, const std::string &value, uint64_t seqNumber);
     void replay(std::function<void(uint64_t, Operation, std::string &, std::string &)> apply);
+    bool empty() const;
 
   private:
     const std::string path_;

@@ -120,3 +120,10 @@ void WriteAheadLog::replay(std::function<void(uint64_t, Operation, std::string &
         }
     }
 }
+
+bool WriteAheadLog::empty() const {
+    if (!std::filesystem::exists(path_)) {
+        return true;
+    }
+    return std::filesystem::file_size(path_) == 0;
+}
