@@ -37,6 +37,7 @@ class StorageEngine {
     MemTable memtable_;
     std::vector<SSTable> sstables_;
     uint64_t flush_counter_;
+    uint64_t seq_number_;
 
     void checkFlush();
 };

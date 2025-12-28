@@ -1,7 +1,7 @@
 #include "storage_engine.h"
 
-StorageEngine::StorageEngine(const std::string &wal_path) : wal_(wal_path), memtable_() {
-    std::ifstream metadataFile("data/storage_metadata.txt");
+StorageEngine::StorageEngine(const std::string &wal_path) : wal_(wal_path), memtable_(), seq_number_(1) {
+    std::ifstream metadataFile("data/metadata.txt");
 
     if (!metadataFile) {
         flush_counter_ = 0;
@@ -10,6 +10,10 @@ StorageEngine::StorageEngine(const std::string &wal_path) : wal_(wal_path), memt
         std::getline(metadataFile, line);
         uint64_t flush_counter = stoull(line);
         flush_counter_ = flush_counter;
+
+        std::getline(metadataFile, line);
+        uint64_t seqNumber = stoull(line);
+        seq_number_ = seqNumber;
     }
 
     for (uint64_t i = 1; i <= flush_counter_; i++) {
@@ -20,11 +24,11 @@ StorageEngine::StorageEngine(const std::string &wal_path) : wal_(wal_path), memt
 
 bool StorageEngine::put(const std::string &key, const std::string &value) {
     bool result = false;
-    if (memtable_.put(key, value)) {
-        wal_.append(Operation::PUT, key, value);
+    if (memtable_.put(key, value, seq_number_)) {
+        wal_.append(Operation::PUT, key, value, seq_number_);
+        seq_number_++;
         result = true;
     }
-    // std::cout << "Checking size: " << " " << memtable_.getSize() << '\n';
     checkFlush();
     return result;
 }
@@ -32,10 +36,10 @@ bool StorageEngine::put(const std::string &key, const std::string &value) {
 bool StorageEngine::del(const std::string &key) {
     bool result = false;
     if (memtable_.del(key)) {
-        wal_.append(Operation::DELETE, key, "");
+        wal_.append(Operation::DELETE, key, "", seq_number_);
+        seq_number_++;
         result = true;
     }
-    // std::cout << "Checking size: " << " " << memtable_.getSize() << '\n';
     checkFlush();
     return result;
 }
@@ -58,20 +62,20 @@ bool StorageEngine::get(const std::string &key, std::string &out) const {
 }
 
 void StorageEngine::ls() const {
-    const std::map<std::string, std::string> currentMemtable = memtable_.snapshot();
+    const std::map<std::string, Entry> currentMemtable = memtable_.snapshot();
     if (!currentMemtable.empty()) {
         std::cout << "Memtable:\n";
-        for (const auto &[key, value] : currentMemtable) {
-            std::cout << key << " " << value << std::endl;
+        for (const auto &[k, v] : currentMemtable) {
+            std::cout << k << " " << v.value << " " << v.seq << std::endl;
         }
         std::cout << '\n';
     }
     if (!sstables_.empty()) {
         for (size_t i = sstables_.size(); i-- > 0;) {
             std::cout << "SSTable " << i << ":\n";
-            std::map<std::string, std::string> currSStableData = sstables_[i].getData();
-            for (const auto &[key, value] : currSStableData) {
-                std::cout << key << " " << value << std::endl;
+            std::map<std::string, Entry> currSStableData = sstables_[i].getData();
+            for (const auto &[k, v] : currSStableData) {
+                std::cout << k << " " << v.value << " " << v.seq << std::endl;
             }
             std::cout << '\n';
         }
@@ -79,18 +83,26 @@ void StorageEngine::ls() const {
 }
 
 void StorageEngine::recover() {
-    wal_.replay([this](Operation op, const std::string &key, const std::string &value) {
-        switch (op) {
-        case Operation::PUT:
-            memtable_.put(key, value);
-            break;
-        case Operation::DELETE:
-            memtable_.del(key);
-            break;
-        default:
-            std::cerr << "Error reading operation\n";
-        }
-    });
+    uint64_t maxSeqNumber = seq_number_;
+
+    if (!wal_.empty()) {
+        wal_.replay([this, &maxSeqNumber](uint64_t seqNumber, Operation op, const std::string &key, const std::string &value) {
+            maxSeqNumber = std::max(maxSeqNumber, seqNumber);
+            switch (op) {
+            case Operation::PUT:
+                memtable_.put(key, value, seqNumber);
+                break;
+            case Operation::DELETE:
+                memtable_.del(key);
+                break;
+            default:
+                std::cerr << "Error reading operation\n";
+            }
+        });
+        std::cout << "here" << std::endl;
+        seq_number_ = maxSeqNumber + 1;
+    }
+    std::cout << seq_number_ << " " << maxSeqNumber << std::endl;
 }
 
 void StorageEngine::handleCommand(const std::string &input) {
@@ -123,21 +135,26 @@ void StorageEngine::checkFlush() {
     static constexpr size_t kMemTableThreshold = 8 * 1024 * 1024;
     // Check if memtable is greater than 8MB
     if (memtable_.getSize() >= kMemTableThreshold) {
+        std::map<std::string, Entry> currentMemTable;
 
         std::cout << "DEBUG: Memtable is greater than threshold\n";
 
-        const std::map<std::string, std::string> currentMemtable = memtable_.snapshot();
+        for (const auto &[k, v] : memtable_.snapshot()) {
+            currentMemTable[k] = {v.value, v.seq};
+        }
+
         const std::string dir_path = "data/sstables/";
 
         flush_counter_++;
 
-        std::cout << "DEBUG: Flushing...\n";
-
-        SSTable newSSTable = SSTable::flush(currentMemtable, dir_path, flush_counter_);
+        SSTable newSSTable = SSTable::flush(currentMemTable, dir_path, flush_counter_);
         sstables_.push_back(newSSTable);
 
-        std::ofstream metadataFile("data/storage_metadata.txt");
-        metadataFile << flush_counter_;
+        std::remove("data/log.bin");
+
+        std::ofstream metadataFile("data/metadata.txt");
+        metadataFile << flush_counter_ << '\n';
+        metadataFile << seq_number_;
 
         memtable_.clear();
     }
