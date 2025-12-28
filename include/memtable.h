@@ -1,23 +1,24 @@
 #ifndef MEMTABLE_H
 #define MEMTABLE_H
 
+#include "types.h"
+#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <map>
 #include <string>
-#include <cstdint>
 
 class MemTable {
   public:
-    bool put(const std::string &key, const std::string &value);
+    bool put(const std::string &key, const std::string &value, uint64_t seqNumber);
     bool del(const std::string &key);
     bool get(const std::string &key, std::string &out) const;
-    const std::map<std::string, std::string>& snapshot() const;
+    const std::map<std::string, Entry> &snapshot() const;
     void clear();
     size_t getSize();
 
   private:
-    std::map<std::string, std::string> memtable;
+    std::map<std::string, Entry> memtable;
 };
 
 #endif

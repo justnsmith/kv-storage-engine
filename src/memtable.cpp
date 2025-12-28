@@ -1,7 +1,8 @@
 #include "memtable.h"
 
-bool MemTable::put(const std::string &key, const std::string &value) {
-    memtable[key] = value;
+bool MemTable::put(const std::string &key, const std::string &value, uint64_t seqNumber) {
+    memtable[key].value = value;
+    memtable[key].seq = seqNumber;
     return true;
 }
 
@@ -16,14 +17,14 @@ bool MemTable::del(const std::string &key) {
 
 bool MemTable::get(const std::string &key, std::string &out) const {
     if (memtable.contains(key)) {
-        out = memtable.at(key);
+        out = memtable.at(key).value;
         return true;
     } else {
         return false;
     }
 }
 
-const std::map<std::string, std::string> &MemTable::snapshot() const {
+const std::map<std::string, Entry> &MemTable::snapshot() const {
     return memtable;
 }
 
@@ -38,7 +39,7 @@ size_t MemTable::getSize() {
     const uint8_t valueLenByteSize = 2;
     const uint8_t opByteSize = 1;
     for (const auto &[k, v] : memtable) {
-        total += checksumByteSize + keyLenByteSize + valueLenByteSize + opByteSize + k.size() + v.size();
+        total += checksumByteSize + keyLenByteSize + valueLenByteSize + opByteSize + k.size() + v.value.size() + sizeof(v.seq);
     }
     return total;
 }
