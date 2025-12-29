@@ -11,4 +11,10 @@ struct Entry {
     uint64_t seq;
 };
 
+struct SSTableEntry {
+    std::string key;
+    std::string value;
+    uint64_t seq;
+};
+
 #endif

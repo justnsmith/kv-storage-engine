@@ -62,23 +62,35 @@ bool StorageEngine::get(const std::string &key, std::string &out) const {
 }
 
 void StorageEngine::ls() const {
-    const std::map<std::string, Entry> currentMemtable = memtable_.snapshot();
+    const auto currentMemtable = memtable_.snapshot();
     if (!currentMemtable.empty()) {
         std::cout << "Memtable:\n";
         for (const auto &[k, v] : currentMemtable) {
-            std::cout << k << " " << v.value << " " << v.seq << std::endl;
+            std::cout << k << " " << v.value << " " << v.seq << "\n";
         }
         std::cout << '\n';
     }
-    if (!sstables_.empty()) {
-        for (size_t i = sstables_.size(); i-- > 0;) {
-            std::cout << "SSTable " << i << ":\n";
-            std::map<std::string, Entry> currSStableData = sstables_[i].getData();
-            for (const auto &[k, v] : currSStableData) {
-                std::cout << k << " " << v.value << " " << v.seq << std::endl;
-            }
-            std::cout << '\n';
+
+    for (size_t i = sstables_.size(); i-- > 0;) {
+        const std::string path = sstables_[i].filename();
+        if (!std::filesystem::exists(path)) {
+            std::cerr << "Warning: SSTable file missing: " << path << ", skipping.\n";
+            continue; // Skip missing files
         }
+
+        size_t underscorePos = path.rfind('_');
+        size_t dotPos = path.rfind(".bin");
+        if (underscorePos == std::string::npos || dotPos == std::string::npos || underscorePos >= dotPos)
+            continue;
+
+        std::string numberStr = path.substr(underscorePos + 1, dotPos - underscorePos - 1);
+        std::cout << "SSTable " << numberStr << ":\n";
+
+        std::map<std::string, Entry> currSStableData = sstables_[i].getData();
+        for (const auto &[k, v] : currSStableData) {
+            std::cout << k << " " << v.value << " " << v.seq << "\n";
+        }
+        std::cout << '\n';
     }
 }
 
@@ -157,6 +169,7 @@ void StorageEngine::checkFlush() {
         metadataFile << seq_number_;
 
         memtable_.clear();
+        checkCompaction();
     }
 }
 
@@ -174,4 +187,110 @@ void StorageEngine::clearData() {
     } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "Filesystem error: " << e.what() << std::endl;
     }
+}
+
+void StorageEngine::checkCompaction() {
+    // Only compact if there are 4 or more SStables
+    if (sstables_.size() < 4) {
+        return;
+    }
+
+    std::cout << "Merging...\n";
+
+    std::vector<SSTable::Iterator> iters;
+    std::transform(sstables_.begin(), sstables_.end(), std::back_inserter(iters),
+                   [](const auto &sstable) { return SSTable::Iterator(sstable); });
+
+    // Priority queue element: (key, seq, iterator index)
+    using HeapElement = std::tuple<std::string, uint64_t, size_t>;
+    auto cmp = [](const HeapElement &a, const HeapElement &b) {
+        if (std::get<0>(a) != std::get<0>(b)) {
+            return std::get<0>(a) > std::get<0>(b);
+        }
+        return std::get<1>(a) < std::get<1>(b);
+    };
+
+    std::priority_queue<HeapElement, std::vector<HeapElement>, decltype(cmp)> pq(cmp);
+
+    for (size_t i = 0; i < iters.size(); i++) {
+        if (iters[i].valid()) {
+            pq.emplace(iters[i].entry().key, iters[i].entry().seq, i);
+        }
+    }
+
+    std::string full_path = "data/sstables/sstable_" + std::to_string(++flush_counter_) + ".bin";
+    std::ofstream sstableFile(full_path, std::ios::out | std::ios::binary);
+    if (!sstableFile) {
+        throw std::runtime_error("Failed to open SSTable file " + full_path);
+    }
+
+    std::string minKey, maxKey;
+
+    while (!pq.empty()) {
+        auto [key, seq, idx] = pq.top();
+        pq.pop();
+
+        std::string highestKey = key;
+        uint64_t highestSeq = seq;
+        std::string highestValue = iters[idx].entry().value;
+
+        std::vector<size_t> sameKeyIndicies = {idx};
+
+        while (!pq.empty() && std::get<0>(pq.top()) == highestKey) {
+            auto [k, s, i] = pq.top();
+            pq.pop();
+            sameKeyIndicies.push_back(i);
+
+            if (s > highestSeq) {
+                highestSeq = s;
+                highestValue = iters[i].entry().value;
+            }
+        }
+
+        uint32_t keyLen = highestKey.size();
+        uint32_t valueLen = highestValue.size();
+        sstableFile.write(reinterpret_cast<const char *>(&highestSeq), sizeof(highestSeq));
+        sstableFile.write(reinterpret_cast<const char *>(&keyLen), sizeof(keyLen));
+        sstableFile.write(reinterpret_cast<const char *>(&valueLen), sizeof(valueLen));
+        sstableFile.write(highestKey.data(), keyLen);
+        sstableFile.write(highestValue.data(), valueLen);
+
+        if (minKey.empty() || highestKey < minKey)
+            minKey = highestKey;
+        if (maxKey.empty() || highestKey > maxKey)
+            maxKey = highestKey;
+
+        for (size_t i : sameKeyIndicies) {
+            iters[i].next();
+            if (iters[i].valid()) {
+                pq.emplace(iters[i].entry().key, iters[i].entry().seq, i);
+            }
+        }
+    }
+
+    // Write metadata
+    uint32_t minKeyLen = minKey.size();
+    uint32_t maxKeyLen = maxKey.size();
+    uint64_t metadataOffset = sstableFile.tellp();
+
+    sstableFile.write(reinterpret_cast<const char *>(&minKeyLen), sizeof(minKeyLen));
+    sstableFile.write(reinterpret_cast<const char *>(&maxKeyLen), sizeof(maxKeyLen));
+    sstableFile.write(minKey.data(), minKeyLen);
+    sstableFile.write(maxKey.data(), maxKeyLen);
+    sstableFile.write(reinterpret_cast<const char *>(&metadataOffset), sizeof(metadataOffset));
+
+    sstableFile.close();
+
+    // Removing old SSTables
+    for (const auto &sstable : sstables_) {
+        std::filesystem::remove(sstable.filename());
+    }
+
+    // Replacing with the new merged SSTable
+    sstables_.clear();
+    sstables_.emplace_back(full_path);
+
+    std::ofstream metadataFile("data/metadata.txt");
+    metadataFile << flush_counter_ << '\n';
+    metadataFile << seq_number_;
 }

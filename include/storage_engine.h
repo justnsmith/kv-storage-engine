@@ -40,6 +40,7 @@ class StorageEngine {
     uint64_t seq_number_;
 
     void checkFlush();
+    void checkCompaction();
 };
 
 #endif
