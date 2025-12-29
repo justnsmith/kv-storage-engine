@@ -51,7 +51,6 @@ SSTable SSTable::flush(const std::map<std::string, Entry> &snapshot, const std::
 std::optional<std::string> SSTable::get(const std::string &key) const {
     std::cout << min_key_ << " " << max_key_ << std::endl;
     if (key < min_key_ || key > max_key_) {
-        std::cout << "here5";
         return std::nullopt;
     }
 
@@ -85,7 +84,6 @@ std::optional<std::string> SSTable::get(const std::string &key) const {
         sstableFile.read(reinterpret_cast<char *>(&currKey[0]), keyLen);
         sstableFile.read(reinterpret_cast<char *>(&currValue[0]), valueLen);
 
-        std::cout << "KEYS: " << currKey << " " << key << std::endl;
         if (currKey == key) {
             return currValue;
         }
@@ -157,6 +155,10 @@ void SSTable::loadMetadata() {
     std::cout << "MAX KEY: " << max_key_ << std::endl;
 }
 
+const std::string &SSTable::filename() const {
+    return path_;
+}
+
 SSTable::Iterator::Iterator(const SSTable &table) : file_(table.path_, std::ios::binary), data_end_(table.metadata_offset_) {
     if (!file_) {
         throw std::runtime_error("Failed to open the SSTable");
@@ -194,7 +196,7 @@ void SSTable::Iterator::readNext() {
     currKey.resize(keyLen);
     currValue.resize(valueLen);
 
-    if (static_cast<std::streamsize>(file_.tellg()) + keyLen + valueLen > data_end_) {
+    if (static_cast<uint64_t>(file_.tellg()) + keyLen + valueLen > data_end_) {
         valid_ = false;
         return;
     }

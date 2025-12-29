@@ -44,7 +44,7 @@ class SSTable {
     std::optional<std::string> get(const std::string &key) const;
 
     // Return the filename for this SSTable
-    std::string filename() const;
+    const std::string &filename() const;
 
     std::map<std::string, Entry> getData() const;
 
