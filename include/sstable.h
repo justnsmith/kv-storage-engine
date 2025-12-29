@@ -14,6 +14,25 @@
 
 class SSTable {
   public:
+    class Iterator {
+      public:
+        explicit Iterator(const SSTable &table);
+
+        bool valid() const;
+
+        const SSTableEntry &entry() const;
+
+        void next();
+
+      private:
+        std::ifstream file_;
+        uint64_t data_end_;
+        bool valid_ = false;
+
+        SSTableEntry current_;
+
+        void readNext();
+    };
     // Constructor for loading an existing SSTable from disk
     explicit SSTable(const std::string &path);
 
@@ -36,6 +55,8 @@ class SSTable {
     uint64_t metadata_offset_;
 
     void loadMetadata();
+
+    friend class Iterator;
 };
 
 #endif

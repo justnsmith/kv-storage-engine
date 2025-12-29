@@ -113,7 +113,7 @@ std::map<std::string, Entry> SSTable::getData() const {
             break;
         }
 
-        uint64_t seqNum = static_cast<uint32_t>(seqNumBytes);
+        uint64_t seqNum = static_cast<uint64_t>(seqNumBytes);
         uint32_t keyLen = static_cast<uint32_t>(keyLenBytes);
         uint32_t valueLen = static_cast<uint32_t>(valueLenBytes);
 
@@ -155,4 +155,69 @@ void SSTable::loadMetadata() {
 
     std::cout << "MIN KEY: " << min_key_ << std::endl;
     std::cout << "MAX KEY: " << max_key_ << std::endl;
+}
+
+SSTable::Iterator::Iterator(const SSTable &table) : file_(table.path_, std::ios::binary), data_end_(table.metadata_offset_) {
+    if (!file_) {
+        throw std::runtime_error("Failed to open the SSTable");
+    }
+
+    file_.seekg(0);
+
+    readNext();
+}
+
+void SSTable::Iterator::readNext() {
+    size_t header_size = sizeof(uint64_t) + sizeof(uint32_t) + sizeof(uint32_t);
+    if (static_cast<size_t>(file_.tellg()) + header_size > data_end_) {
+        valid_ = false;
+        return;
+    }
+
+    uint64_t seqNumBytes{};
+    uint32_t keyLenBytes{};
+    uint32_t valueLenBytes{};
+
+    if (!file_.read(reinterpret_cast<char *>(&seqNumBytes), sizeof(seqNumBytes)) ||
+        !file_.read(reinterpret_cast<char *>(&keyLenBytes), sizeof(keyLenBytes)) ||
+        !file_.read(reinterpret_cast<char *>(&valueLenBytes), sizeof(valueLenBytes))) {
+        valid_ = false;
+        return;
+    }
+
+    uint64_t seqNum = static_cast<uint64_t>(seqNumBytes);
+    uint32_t keyLen = static_cast<uint32_t>(keyLenBytes);
+    uint32_t valueLen = static_cast<uint32_t>(valueLenBytes);
+
+    std::string currKey;
+    std::string currValue;
+    currKey.resize(keyLen);
+    currValue.resize(valueLen);
+
+    if (static_cast<std::streamsize>(file_.tellg()) + keyLen + valueLen > data_end_) {
+        valid_ = false;
+        return;
+    }
+
+    if (!file_.read(reinterpret_cast<char *>(&currKey[0]), keyLen) || !file_.read(reinterpret_cast<char *>(&currValue[0]), valueLen)) {
+        valid_ = false;
+        return;
+    }
+
+    current_.seq = seqNum;
+    current_.key = currKey;
+    current_.value = currValue;
+    valid_ = true;
+}
+
+void SSTable::Iterator::next() {
+    readNext();
+}
+
+bool SSTable::Iterator::valid() const {
+    return valid_;
+}
+
+const SSTableEntry &SSTable::Iterator::entry() const {
+    return current_;
 }
