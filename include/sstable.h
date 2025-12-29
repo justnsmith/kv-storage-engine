@@ -2,6 +2,7 @@
 #define SSTABLE_H
 
 #include "types.h"
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>

@@ -6,6 +6,7 @@
 #include "sstable.h"
 #include "types.h"
 #include "wal.h"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -13,7 +14,9 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <queue>
 #include <string>
+#include <tuple>
 #include <vector>
 
 class WriteAheadLog;
