@@ -6,8 +6,9 @@ bool MemTable::put(const std::string &key, const std::string &value, uint64_t se
 }
 
 bool MemTable::del(const std::string &key, uint64_t seqNumber) {
+    bool existed = memtable.contains(key) && memtable.at(key).type != EntryType::DELETE;
     memtable[key] = Entry{"", seqNumber, EntryType::DELETE};
-    return true;
+    return existed;
 }
 
 bool MemTable::get(const std::string &key, Entry &out) const {

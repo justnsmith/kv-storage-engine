@@ -28,7 +28,7 @@ bool test_simple_put_and_get(StorageEngineTest &fixture) {
     fixture.setUp();
     auto &engine = fixture.getEngine();
     bool status;
-    std::string result;
+    Entry result;
 
     status = engine.put("user42", "123");
 
@@ -37,7 +37,7 @@ bool test_simple_put_and_get(StorageEngineTest &fixture) {
     status = engine.get("user42", result);
 
     ASSERT_TRUE(status, "GET after PUT should succeed");
-    ASSERT_EQ(result, "123", "Value should match what was put");
+    ASSERT_EQ(result.value, "123", "Value should match what was put");
 
     return true;
 }
@@ -50,11 +50,11 @@ bool test_update_existing_key(StorageEngineTest &fixture) {
 
     engine.put("user42", "new123");
 
-    std::string result;
+    Entry result;
     bool status = engine.get("user42", result);
 
     ASSERT_TRUE(status, "GET after update should succeed");
-    ASSERT_EQ(result, "new123", "Value should be updated to new123");
+    ASSERT_EQ(result.value, "new123", "Value should be updated to new123");
 
     return true;
 }
@@ -63,7 +63,7 @@ bool test_get_nonexistent_key(StorageEngineTest &fixture) {
     fixture.setUp();
     const auto &engine = fixture.getEngine();
 
-    std::string result;
+    Entry result;
     bool status = engine.get("nonexistent", result);
 
     ASSERT_TRUE(!status, "GET on nonexistent key should return false");
@@ -99,11 +99,11 @@ bool test_recovery_from_wal() {
         StorageEngine recoveredEngine(walPath);
         recoveredEngine.recover();
 
-        std::string out;
+        Entry out;
 
         ASSERT_TRUE(!recoveredEngine.get("key1", out), "key1 should not exist after recovery");
         ASSERT_TRUE(recoveredEngine.get("key2", out), "key2 should exist after recovery");
-        ASSERT_EQ(out, "value2", "Recovered value should match last written value");
+        ASSERT_EQ(out.value, "value2", "Recovered value should match last written value");
     }
     return true;
 }

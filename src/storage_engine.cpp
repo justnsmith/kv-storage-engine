@@ -34,14 +34,17 @@ bool StorageEngine::put(const std::string &key, const std::string &value) {
 }
 
 bool StorageEngine::del(const std::string &key) {
-    bool result = false;
-    if (memtable_.del(key, seq_number_)) {
-        wal_.append(Operation::DELETE, key, "", seq_number_);
-        seq_number_++;
-        result = true;
-    }
+    Entry existing;
+    bool existed = get(key, existing);
+
+    memtable_.del(key, seq_number_);
+    wal_.append(Operation::DELETE, key, "", seq_number_);
+    seq_number_++;
+
     checkFlush();
-    return result;
+
+    std::cout << std::boolalpha << existed << std::endl;
+    return existed;
 }
 
 bool StorageEngine::get(const std::string &key, Entry &out) const {
@@ -78,7 +81,7 @@ void StorageEngine::ls() const {
     if (!currentMemtable.empty()) {
         std::cout << "Memtable:\n";
         for (const auto &[k, v] : currentMemtable) {
-            std::cout << k << " " << v.value << " " << v.seq << "\n";
+            std::cout << k << " " << (v.type == EntryType::DELETE ? "<TOMBSTONE>" : v.value) << " " << v.seq << "\n";
         }
         std::cout << '\n';
     }

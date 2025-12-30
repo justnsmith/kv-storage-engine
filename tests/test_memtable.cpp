@@ -28,11 +28,11 @@ bool test_put_and_get(MemTableTest &fixture) {
 
     ASSERT_TRUE(status, "PUT should succeed in memtable since unique key");
 
-    std::string out;
+    Entry out;
     status = mt.get("key1", out);
 
     ASSERT_TRUE(status, "GET should succeed since value is in memtable");
-    ASSERT_EQ(out, "value1", "Value should match");
+    ASSERT_EQ(out.value, "value1", "Value should match");
 
     return true;
 }
@@ -48,11 +48,11 @@ bool test_overwrite(MemTableTest &fixture) {
     status = mt.put("key1", "value2", 2);
     ASSERT_TRUE(status, "PUT should succeed by updating current key with new value");
 
-    std::string out;
+    Entry out;
 
     status = mt.get("key1", out);
     ASSERT_TRUE(status, "GET should succeed");
-    ASSERT_EQ(out, "value2", "Value should match the updated value");
+    ASSERT_EQ(out.value, "value2", "Value should match the updated value");
 
     return true;
 }
@@ -65,10 +65,10 @@ bool test_delete(MemTableTest &fixture) {
     status = mt.put("key1", "value1", 1);
     ASSERT_TRUE(status, "PUT should succeed");
 
-    status = mt.del("key1");
+    status = mt.del("key1", 2);
     ASSERT_TRUE(status, "Delete should succeed");
 
-    status = mt.del("key1");
+    status = mt.del("key1", 3);
     ASSERT_TRUE(!status, "Delete should fail since key does not exist");
     return true;
 }
@@ -105,10 +105,10 @@ bool test_snapshot(MemTableTest &fixture) {
     std::map<std::string, Entry> mtSnapshot = mt.snapshot();
 
     for (const auto &[k, v] : mtSnapshot) {
-        std::string out;
+        Entry out;
         status = mt.get(k, out);
         ASSERT_TRUE(status, "GET should succeed");
-        ASSERT_EQ(out, v.value, "Value in snapshot should match value in MemTable");
+        ASSERT_EQ(out.value, v.value, "Value in snapshot should match value in MemTable");
     }
     return true;
 }
