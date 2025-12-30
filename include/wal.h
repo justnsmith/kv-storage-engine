@@ -2,8 +2,10 @@
 #define WAL_H
 
 #include "types.h"
+#include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -11,6 +13,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <zlib.h>
 
 class WriteAheadLog {
