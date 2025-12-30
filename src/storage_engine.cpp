@@ -35,7 +35,7 @@ bool StorageEngine::put(const std::string &key, const std::string &value) {
 
 bool StorageEngine::del(const std::string &key) {
     bool result = false;
-    if (memtable_.del(key)) {
+    if (memtable_.del(key, seq_number_)) {
         wal_.append(Operation::DELETE, key, "", seq_number_);
         seq_number_++;
         result = true;
@@ -44,21 +44,33 @@ bool StorageEngine::del(const std::string &key) {
     return result;
 }
 
-bool StorageEngine::get(const std::string &key, std::string &out) const {
-    bool result = false;
-    if (!memtable_.get(key, out)) {
-        for (size_t i = sstables_.size(); i-- > 0;) {
-            std::optional<std::string> sstableResult = sstables_[i].get(key);
-            if (sstableResult != std::nullopt) {
-                out = *sstableResult;
-                result = true;
-                return result;
-            }
-        }
-    } else {
-        result = true;
+bool StorageEngine::get(const std::string &key, Entry &out) const {
+    std::optional<Entry> candidate{};
+
+    Entry mem;
+    if (memtable_.get(key, mem)) {
+        candidate = mem;
     }
-    return result;
+
+    for (size_t i = sstables_.size(); i-- > 0;) {
+        std::optional<Entry> record = sstables_[i].get(key);
+        if (record != std::nullopt) {
+            if (!candidate || record->seq > candidate->seq) {
+                candidate = *record;
+            }
+            break;
+        }
+    }
+
+    if (!candidate)
+        return false;
+
+    if (candidate->type == EntryType::DELETE) {
+        return false;
+    }
+
+    out = *candidate;
+    return true;
 }
 
 void StorageEngine::ls() const {
@@ -94,6 +106,18 @@ void StorageEngine::ls() const {
     }
 }
 
+void StorageEngine::flush() {
+    checkFlush(true);
+}
+
+void StorageEngine::clear() {
+    std::filesystem::remove_all("data");
+    memtable_.clear();
+    sstables_.clear();
+    flush_counter_ = 0;
+    seq_number_ = 1;
+}
+
 void StorageEngine::recover() {
     uint64_t maxSeqNumber = seq_number_;
 
@@ -105,7 +129,7 @@ void StorageEngine::recover() {
                 memtable_.put(key, value, seqNumber);
                 break;
             case Operation::DELETE:
-                memtable_.del(key);
+                memtable_.del(key, seqNumber);
                 break;
             default:
                 std::cerr << "Error reading operation\n";
@@ -126,13 +150,21 @@ void StorageEngine::handleCommand(const std::string &input) {
         put(key, value);
         break;
     case Operation::GET: {
-        std::string result;
+        Entry result;
         get(key, result);
-        std::cout << result << std::endl;
+        std::cout << result.value << std::endl;
         break;
     }
     case Operation::LS: {
         ls();
+        break;
+    }
+    case Operation::FLUSH: {
+        flush();
+        break;
+    }
+    case Operation::CLEAR: {
+        clear();
         break;
     }
     case Operation::DELETE:
@@ -143,16 +175,16 @@ void StorageEngine::handleCommand(const std::string &input) {
     }
 }
 
-void StorageEngine::checkFlush() {
+void StorageEngine::checkFlush(bool debug) {
     static constexpr size_t kMemTableThreshold = 8 * 1024 * 1024;
     // Check if memtable is greater than 8MB
-    if (memtable_.getSize() >= kMemTableThreshold) {
+    if (memtable_.getSize() >= kMemTableThreshold || debug) {
         std::map<std::string, Entry> currentMemTable;
 
         std::cout << "DEBUG: Memtable is greater than threshold\n";
 
         for (const auto &[k, v] : memtable_.snapshot()) {
-            currentMemTable[k] = {v.value, v.seq};
+            currentMemTable[k] = v;
         }
 
         const std::string dir_path = "data/sstables/";
@@ -202,7 +234,7 @@ void StorageEngine::checkCompaction() {
                    [](const auto &sstable) { return SSTable::Iterator(sstable); });
 
     // Priority queue element: (key, seq, iterator index)
-    using HeapElement = std::tuple<std::string, uint64_t, size_t>;
+    using HeapElement = std::tuple<std::string, uint64_t, EntryType, size_t>;
     auto cmp = [](const HeapElement &a, const HeapElement &b) {
         if (std::get<0>(a) != std::get<0>(b)) {
             return std::get<0>(a) > std::get<0>(b);
@@ -214,7 +246,8 @@ void StorageEngine::checkCompaction() {
 
     for (size_t i = 0; i < iters.size(); i++) {
         if (iters[i].valid()) {
-            pq.emplace(iters[i].entry().key, iters[i].entry().seq, i);
+            const auto &e = iters[i].entry();
+            pq.emplace(e.key, e.seq, e.type, i);
         }
     }
 
@@ -227,43 +260,49 @@ void StorageEngine::checkCompaction() {
     std::string minKey, maxKey;
 
     while (!pq.empty()) {
-        auto [key, seq, idx] = pq.top();
+        auto [key, seq, type, idx] = pq.top();
         pq.pop();
 
-        std::string highestKey = key;
         uint64_t highestSeq = seq;
+        EntryType highestType = type;
         std::string highestValue = iters[idx].entry().value;
 
-        std::vector<size_t> sameKeyIndicies = {idx};
+        std::vector<size_t> sameKeyIndices = {idx};
 
-        while (!pq.empty() && std::get<0>(pq.top()) == highestKey) {
-            auto [k, s, i] = pq.top();
+        while (!pq.empty() && std::get<0>(pq.top()) == key) {
+            auto [_, s, t, i] = pq.top();
             pq.pop();
-            sameKeyIndicies.push_back(i);
+            sameKeyIndices.push_back(i);
 
             if (s > highestSeq) {
                 highestSeq = s;
+                highestType = t;
                 highestValue = iters[i].entry().value;
             }
         }
 
-        uint32_t keyLen = highestKey.size();
-        uint32_t valueLen = highestValue.size();
-        sstableFile.write(reinterpret_cast<const char *>(&highestSeq), sizeof(highestSeq));
-        sstableFile.write(reinterpret_cast<const char *>(&keyLen), sizeof(keyLen));
-        sstableFile.write(reinterpret_cast<const char *>(&valueLen), sizeof(valueLen));
-        sstableFile.write(highestKey.data(), keyLen);
-        sstableFile.write(highestValue.data(), valueLen);
+        if (highestType == EntryType::PUT) {
+            uint32_t keyLen = key.size();
+            uint32_t valueLen = highestValue.size();
+            uint8_t typeByte = static_cast<uint8_t>(EntryType::PUT);
 
-        if (minKey.empty() || highestKey < minKey)
-            minKey = highestKey;
-        if (maxKey.empty() || highestKey > maxKey)
-            maxKey = highestKey;
+            sstableFile.write(reinterpret_cast<const char *>(&highestSeq), sizeof(highestSeq));
+            sstableFile.write(reinterpret_cast<const char *>(&typeByte), sizeof(typeByte));
+            sstableFile.write(reinterpret_cast<const char *>(&keyLen), sizeof(keyLen));
+            sstableFile.write(reinterpret_cast<const char *>(&valueLen), sizeof(valueLen));
+            sstableFile.write(key.data(), keyLen);
+            sstableFile.write(highestValue.data(), valueLen);
 
-        for (size_t i : sameKeyIndicies) {
+            if (minKey.empty() || key < minKey)
+                minKey = key;
+            if (maxKey.empty() || key > maxKey)
+                maxKey = key;
+        }
+        for (size_t i : sameKeyIndices) {
             iters[i].next();
             if (iters[i].valid()) {
-                pq.emplace(iters[i].entry().key, iters[i].entry().seq, i);
+                const auto &e = iters[i].entry();
+                pq.emplace(e.key, e.seq, e.type, i);
             }
         }
     }

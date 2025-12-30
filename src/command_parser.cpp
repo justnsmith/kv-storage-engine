@@ -43,6 +43,16 @@ Operation parseCommand(const std::string &input, std::string &key, std::string &
             return Operation::ERROR;
         }
         return Operation::LS;
+    } else if (input.substr(0, 5) == "flush") {
+        if (input.size() != 5) {
+            return Operation::ERROR;
+        }
+        return Operation::FLUSH;
+    } else if (input.substr(0, 5) == "clear") {
+        if (input.size() != 5) {
+            return Operation::ERROR;
+        }
+        return Operation::CLEAR;
     }
 
     return Operation::ERROR;

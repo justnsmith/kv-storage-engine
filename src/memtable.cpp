@@ -1,27 +1,22 @@
 #include "memtable.h"
 
 bool MemTable::put(const std::string &key, const std::string &value, uint64_t seqNumber) {
-    memtable[key].value = value;
-    memtable[key].seq = seqNumber;
+    memtable[key] = Entry{value, seqNumber, EntryType::PUT};
     return true;
 }
 
-bool MemTable::del(const std::string &key) {
-    if (memtable.contains(key)) {
-        memtable.erase(key);
-        return true;
-    } else {
-        return false;
-    }
+bool MemTable::del(const std::string &key, uint64_t seqNumber) {
+    memtable[key] = Entry{"", seqNumber, EntryType::DELETE};
+    return true;
 }
 
-bool MemTable::get(const std::string &key, std::string &out) const {
-    if (memtable.contains(key)) {
-        out = memtable.at(key).value;
-        return true;
-    } else {
+bool MemTable::get(const std::string &key, Entry &out) const {
+    auto it = memtable.find(key);
+    if (it == memtable.end()) {
         return false;
     }
+    out = it->second;
+    return true;
 }
 
 const std::map<std::string, Entry> &MemTable::snapshot() const {
@@ -34,12 +29,20 @@ void MemTable::clear() {
 
 size_t MemTable::getSize() {
     size_t total = 0;
-    const uint8_t checksumByteSize = 4;
-    const uint8_t keyLenByteSize = 2;
-    const uint8_t valueLenByteSize = 2;
-    const uint8_t opByteSize = 1;
-    for (const auto &[k, v] : memtable) {
-        total += checksumByteSize + keyLenByteSize + valueLenByteSize + opByteSize + k.size() + v.value.size() + sizeof(v.seq);
+
+    constexpr size_t checksumSize = 4;
+    constexpr size_t keyLenSize = 2;
+    constexpr size_t valueLenSize = 2;
+    constexpr size_t opSize = 1;
+    constexpr size_t seqSize = sizeof(uint64_t);
+
+    for (const auto &[key, entry] : memtable) {
+        total += checksumSize + keyLenSize + valueLenSize + opSize + seqSize + key.size();
+
+        if (entry.type == EntryType::PUT) {
+            total += entry.value.size();
+        }
     }
+
     return total;
 }

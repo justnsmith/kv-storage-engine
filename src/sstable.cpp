@@ -23,6 +23,7 @@ SSTable SSTable::flush(const std::map<std::string, Entry> &snapshot, const std::
         const char *valueBytes = v.value.data();
 
         sstableFile.write(reinterpret_cast<const char *>(&v.seq), sizeof(v.seq));
+        sstableFile.write(reinterpret_cast<const char *>(&v.type), sizeof(v.type));
         sstableFile.write(reinterpret_cast<const char *>(&keyLen), sizeof(keyLen));
         sstableFile.write(reinterpret_cast<const char *>(&valueLen), sizeof(valueLen));
         sstableFile.write(keyBytes, keyLen);
@@ -48,87 +49,67 @@ SSTable SSTable::flush(const std::map<std::string, Entry> &snapshot, const std::
     return table;
 }
 
-std::optional<std::string> SSTable::get(const std::string &key) const {
-    std::cout << min_key_ << " " << max_key_ << std::endl;
+std::optional<Entry> SSTable::get(const std::string &key) const {
     if (key < min_key_ || key > max_key_) {
         return std::nullopt;
     }
 
-    std::ifstream sstableFile(path_, std::ios::in | std::ios::binary);
+    std::ifstream file(path_, std::ios::binary);
+    if (!file)
+        throw std::runtime_error("Failed to open SSTable");
 
-    if (!sstableFile) {
-        throw std::runtime_error("Failed to open SSTable file: " + path_);
-    }
+    while (file.tellg() < static_cast<std::streampos>(metadata_offset_)) {
+        uint64_t seq;
+        EntryType type;
+        uint32_t keyLen, valueLen;
 
-    uint64_t seqNumBytes{};
-    uint32_t keyLenBytes{};
-    uint32_t valueLenBytes{};
-
-    while (true) {
-
-        if (!sstableFile.read(reinterpret_cast<char *>(&seqNumBytes), sizeof(seqNumBytes))) {
+        if (!file.read(reinterpret_cast<char *>(&seq), sizeof(seq)))
             break;
+        file.read(reinterpret_cast<char *>(&type), sizeof(type));
+        file.read(reinterpret_cast<char *>(&keyLen), sizeof(keyLen));
+        file.read(reinterpret_cast<char *>(&valueLen), sizeof(valueLen));
+
+        std::string k(keyLen, '\0');
+        std::string v(valueLen, '\0');
+
+        file.read(k.data(), keyLen);
+        if (type == EntryType::PUT) {
+            file.read(v.data(), valueLen);
         }
-        sstableFile.read(reinterpret_cast<char *>(&keyLenBytes), sizeof(keyLenBytes));
-        sstableFile.read(reinterpret_cast<char *>(&valueLenBytes), sizeof(valueLenBytes));
 
-        // uint64_t seqNum = static_cast<uint32_t>(seqNumBytes);
-        uint32_t keyLen = static_cast<uint32_t>(keyLenBytes);
-        uint32_t valueLen = static_cast<uint32_t>(valueLenBytes);
-
-        std::string currKey;
-        std::string currValue;
-        currKey.resize(keyLen);
-        currValue.resize(valueLen);
-
-        sstableFile.read(reinterpret_cast<char *>(&currKey[0]), keyLen);
-        sstableFile.read(reinterpret_cast<char *>(&currValue[0]), valueLen);
-
-        if (currKey == key) {
-            return currValue;
+        if (k == key) {
+            return Entry{v, seq, type};
         }
     }
     return std::nullopt;
 }
 
 std::map<std::string, Entry> SSTable::getData() const {
-    std::map<std::string, Entry> sstableData;
+    std::map<std::string, Entry> data;
+    std::ifstream file(path_, std::ios::binary);
 
-    std::ifstream sstableFile(path_, std::ios::in | std::ios::binary);
+    while (file.tellg() < static_cast<std::streampos>(metadata_offset_)) {
+        uint64_t seq;
+        EntryType type;
+        uint32_t keyLen, valueLen;
 
-    if (!sstableFile) {
-        throw std::runtime_error("Failed to open SSTable file: " + path_);
-    }
-
-    uint64_t seqNumBytes{};
-    uint32_t keyLenBytes{};
-    uint32_t valueLenBytes{};
-
-    while (true) {
-        if (!sstableFile.read(reinterpret_cast<char *>(&seqNumBytes), sizeof(seqNumBytes)) ||
-            !sstableFile.read(reinterpret_cast<char *>(&keyLenBytes), sizeof(keyLenBytes)) ||
-            !sstableFile.read(reinterpret_cast<char *>(&valueLenBytes), sizeof(valueLenBytes))) {
+        if (!file.read(reinterpret_cast<char *>(&seq), sizeof(seq)))
             break;
+        file.read(reinterpret_cast<char *>(&type), sizeof(type));
+        file.read(reinterpret_cast<char *>(&keyLen), sizeof(keyLen));
+        file.read(reinterpret_cast<char *>(&valueLen), sizeof(valueLen));
+
+        std::string k(keyLen, '\0');
+        std::string v(valueLen, '\0');
+
+        file.read(k.data(), keyLen);
+        if (type == EntryType::PUT) {
+            file.read(v.data(), valueLen);
         }
 
-        uint64_t seqNum = static_cast<uint64_t>(seqNumBytes);
-        uint32_t keyLen = static_cast<uint32_t>(keyLenBytes);
-        uint32_t valueLen = static_cast<uint32_t>(valueLenBytes);
-
-        std::string currKey;
-        std::string currValue;
-        currKey.resize(keyLen);
-        currValue.resize(valueLen);
-
-        if (!sstableFile.read(reinterpret_cast<char *>(&currKey[0]), keyLen) ||
-            !sstableFile.read(reinterpret_cast<char *>(&currValue[0]), valueLen)) {
-            break;
-        }
-
-        sstableData[currKey].value = currValue;
-        sstableData[currKey].seq = seqNum;
+        data[k] = Entry{v, seq, type};
     }
-    return sstableData;
+    return data;
 }
 
 void SSTable::loadMetadata() {
@@ -170,45 +151,33 @@ SSTable::Iterator::Iterator(const SSTable &table) : file_(table.path_, std::ios:
 }
 
 void SSTable::Iterator::readNext() {
-    size_t header_size = sizeof(uint64_t) + sizeof(uint32_t) + sizeof(uint32_t);
-    if (static_cast<size_t>(file_.tellg()) + header_size > data_end_) {
+    if (file_.tellg() >= static_cast<std::streampos>(data_end_)) {
         valid_ = false;
         return;
     }
 
-    uint64_t seqNumBytes{};
-    uint32_t keyLenBytes{};
-    uint32_t valueLenBytes{};
+    uint64_t seq;
+    EntryType type;
+    uint32_t keyLen, valueLen;
 
-    if (!file_.read(reinterpret_cast<char *>(&seqNumBytes), sizeof(seqNumBytes)) ||
-        !file_.read(reinterpret_cast<char *>(&keyLenBytes), sizeof(keyLenBytes)) ||
-        !file_.read(reinterpret_cast<char *>(&valueLenBytes), sizeof(valueLenBytes))) {
+    if (!file_.read(reinterpret_cast<char *>(&seq), sizeof(seq))) {
         valid_ = false;
         return;
     }
 
-    uint64_t seqNum = static_cast<uint64_t>(seqNumBytes);
-    uint32_t keyLen = static_cast<uint32_t>(keyLenBytes);
-    uint32_t valueLen = static_cast<uint32_t>(valueLenBytes);
+    file_.read(reinterpret_cast<char *>(&type), sizeof(type));
+    file_.read(reinterpret_cast<char *>(&keyLen), sizeof(keyLen));
+    file_.read(reinterpret_cast<char *>(&valueLen), sizeof(valueLen));
 
-    std::string currKey;
-    std::string currValue;
-    currKey.resize(keyLen);
-    currValue.resize(valueLen);
+    std::string key(keyLen, '\0');
+    std::string value(valueLen, '\0');
 
-    if (static_cast<uint64_t>(file_.tellg()) + keyLen + valueLen > data_end_) {
-        valid_ = false;
-        return;
+    file_.read(key.data(), keyLen);
+    if (type == EntryType::PUT) {
+        file_.read(value.data(), valueLen);
     }
 
-    if (!file_.read(reinterpret_cast<char *>(&currKey[0]), keyLen) || !file_.read(reinterpret_cast<char *>(&currValue[0]), valueLen)) {
-        valid_ = false;
-        return;
-    }
-
-    current_.seq = seqNum;
-    current_.key = currKey;
-    current_.value = currValue;
+    current_ = SSTableEntry{key, value, seq, type};
     valid_ = true;
 }
 

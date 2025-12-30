@@ -42,7 +42,7 @@ class SSTable {
     static SSTable flush(const std::map<std::string, Entry> &snapshot, const std::string &dir_path, uint64_t flush_counter);
 
     // Retrieve a value by key. Returns std::nullopt if key not found.
-    std::optional<std::string> get(const std::string &key) const;
+    std::optional<Entry> get(const std::string &key) const;
 
     // Return the filename for this SSTable
     const std::string &filename() const;

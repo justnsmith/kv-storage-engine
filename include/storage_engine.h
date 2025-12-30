@@ -28,8 +28,10 @@ class StorageEngine {
 
     bool put(const std::string &key, const std::string &value);
     bool del(const std::string &key);
-    bool get(const std::string &key, std::string &out) const;
+    bool get(const std::string &key, Entry &out) const;
     void ls() const;
+    void flush();
+    void clear();
     void handleCommand(const std::string &input);
 
     void recover();
@@ -42,7 +44,7 @@ class StorageEngine {
     uint64_t flush_counter_;
     uint64_t seq_number_;
 
-    void checkFlush();
+    void checkFlush(bool debug = false);
     void checkCompaction();
 };
 
