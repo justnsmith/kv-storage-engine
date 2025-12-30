@@ -16,7 +16,16 @@ SSTable SSTable::flush(const std::map<std::string, Entry> &snapshot, const std::
         throw std::runtime_error("Failed to open SSTable file: " + full_path);
     }
 
+    size_t entry_count = 0;
+
     for (const auto &[k, v] : snapshot) {
+
+        if (entry_count % INDEX_INTERVAL == 0) {
+            uint64_t offset = sstableFile.tellp();
+            table.index_.push_back(IndexEntry{k, offset});
+        }
+        entry_count++;
+
         uint32_t keyLen = k.size();
         uint32_t valueLen = v.value.size();
         const char *keyBytes = k.data();
@@ -38,11 +47,22 @@ SSTable SSTable::flush(const std::map<std::string, Entry> &snapshot, const std::
 
     table.metadata_offset_ = sstableFile.tellp();
 
+    // Write metadata
     sstableFile.write(reinterpret_cast<const char *>(&minKeyLen), sizeof(minKeyLen));
     sstableFile.write(reinterpret_cast<const char *>(&maxKeyLen), sizeof(maxKeyLen));
-
     sstableFile.write(table.min_key_.data(), minKeyLen);
     sstableFile.write(table.max_key_.data(), maxKeyLen);
+
+    // Write the index to file
+    uint32_t indexSize = table.index_.size();
+    sstableFile.write(reinterpret_cast<const char *>(&indexSize), sizeof(indexSize));
+
+    for (const auto &entry : table.index_) {
+        uint32_t keyLen = entry.key.size();
+        sstableFile.write(reinterpret_cast<const char *>(&keyLen), sizeof(keyLen));
+        sstableFile.write(entry.key.data(), keyLen);
+        sstableFile.write(reinterpret_cast<const char *>(&entry.offset), sizeof(entry.offset));
+    }
 
     sstableFile.write(reinterpret_cast<const char *>(&table.metadata_offset_), sizeof(table.metadata_offset_));
 
@@ -58,7 +78,29 @@ std::optional<Entry> SSTable::get(const std::string &key) const {
     if (!file)
         throw std::runtime_error("Failed to open SSTable");
 
-    while (file.tellg() < static_cast<std::streampos>(metadata_offset_)) {
+    // Binary search index to find start position
+    uint64_t search_start = 0;
+    uint64_t search_end = metadata_offset_;
+
+    if (!index_.empty()) {
+        // Find largest index <= key
+        auto it = std::upper_bound(index_.begin(), index_.end(), key,
+                                   [](const std::string &k, const IndexEntry &entry) { return k < entry.key; });
+        // Go back one to get largest entry <= key
+        if (it != index_.begin()) {
+            --it;
+            search_start = it->offset;
+        }
+
+        // Set search_end to next index entry if it exists
+        if (it != index_.end() && (it + 1) != index_.end()) {
+            search_end = (it + 1)->offset;
+        }
+    }
+
+    file.seekg(search_start);
+
+    while (file.tellg() < static_cast<std::streampos>(search_end)) {
         uint64_t seq;
         EntryType type;
         uint32_t keyLen, valueLen;
@@ -79,6 +121,10 @@ std::optional<Entry> SSTable::get(const std::string &key) const {
 
         if (k == key) {
             return Entry{v, seq, type};
+        }
+
+        if (k > key) {
+            break;
         }
     }
     return std::nullopt;
@@ -118,7 +164,6 @@ void SSTable::loadMetadata() {
         return;
 
     sstableFile.seekg(-static_cast<int>(sizeof(uint64_t)), std::ios::end);
-
     sstableFile.read(reinterpret_cast<char *>(&metadata_offset_), sizeof(metadata_offset_));
 
     sstableFile.seekg(metadata_offset_);
@@ -128,12 +173,57 @@ void SSTable::loadMetadata() {
     min_key_.resize(minKeyLen);
     sstableFile.read(reinterpret_cast<char *>(&maxKeyLen), sizeof(maxKeyLen));
     max_key_.resize(maxKeyLen);
-
     sstableFile.read(&min_key_[0], minKeyLen);
     sstableFile.read(&max_key_[0], maxKeyLen);
 
+    uint32_t indexSize;
+    sstableFile.read(reinterpret_cast<char *>(&indexSize), sizeof(indexSize));
+
+    index_.reserve(indexSize);
+    for (uint32_t i = 0; i < indexSize; i++) {
+        uint32_t keyLen;
+        sstableFile.read(reinterpret_cast<char *>(&keyLen), sizeof(keyLen));
+
+        std::string key(keyLen, '\0');
+        sstableFile.read(&key[0], keyLen);
+
+        uint64_t offset;
+        sstableFile.read(reinterpret_cast<char *>(&offset), sizeof(offset));
+
+        index_.push_back(IndexEntry{key, offset});
+    }
+
     std::cout << "MIN KEY: " << min_key_ << std::endl;
     std::cout << "MAX KEY: " << max_key_ << std::endl;
+    std::cout << "INDEX SIZE: " << index_.size() << " entries" << std::endl;
+}
+
+void SSTable::buildIndex() {
+    std::ifstream file(path_, std::ios::binary);
+    size_t entry_count = 0;
+
+    while (file.tellg() < static_cast<std::streampos>(metadata_offset_)) {
+        uint64_t offset = file.tellg();
+
+        uint64_t seq;
+        EntryType type;
+        uint32_t keyLen, valueLen;
+
+        file.read(reinterpret_cast<char *>(&seq), sizeof(seq));
+        file.read(reinterpret_cast<char *>(&type), sizeof(type));
+        file.read(reinterpret_cast<char *>(&keyLen), sizeof(keyLen));
+        file.read(reinterpret_cast<char *>(&valueLen), sizeof(valueLen));
+
+        std::string key(keyLen, '\0');
+        file.read(&key[0], keyLen);
+
+        file.seekg(valueLen, std::ios::cur);
+
+        if (entry_count % INDEX_INTERVAL == 0) {
+            index_.push_back(IndexEntry{key, offset});
+        }
+        entry_count++;
+    }
 }
 
 const std::string &SSTable::filename() const {

@@ -21,4 +21,9 @@ struct SSTableEntry {
     EntryType type;
 };
 
+struct IndexEntry {
+    std::string key;
+    uint64_t offset;
+};
+
 #endif

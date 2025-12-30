@@ -54,8 +54,12 @@ class SSTable {
     std::string min_key_;
     std::string max_key_;
     uint64_t metadata_offset_;
+    std::vector<IndexEntry> index_;
+
+    static constexpr size_t INDEX_INTERVAL = 16;
 
     void loadMetadata();
+    void buildIndex();
 
     friend class Iterator;
 };
