@@ -9,6 +9,8 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <vector>
+#include <algorithm>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
