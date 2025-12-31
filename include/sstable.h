@@ -62,7 +62,6 @@ class SSTable {
     static constexpr double BLOOM_FP_RATE = 0.01;
 
     void loadMetadata();
-    void buildIndex();
 
     friend class Iterator;
 };

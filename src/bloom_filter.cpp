@@ -41,12 +41,7 @@ void BloomFilter::add(const std::string &key) {
 
 bool BloomFilter::contains(const std::string &key) const {
     auto hashes = hash(key);
-    for (size_t h : hashes) {
-        if (!bits_[h]) {
-            return false;
-        }
-    }
-    return true;
+    return std::all_of(hashes.begin(), hashes.end(), [this](size_t h) { return bits_[h]; });
 }
 
 std::vector<uint8_t> BloomFilter::serialize() const {

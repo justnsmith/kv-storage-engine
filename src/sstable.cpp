@@ -224,34 +224,6 @@ void SSTable::loadMetadata() {
     std::cout << "BLOOM FILTER SIZE: " << bloom_filter_->size() << " bits" << std::endl;
 }
 
-void SSTable::buildIndex() {
-    std::ifstream file(path_, std::ios::binary);
-    size_t entry_count = 0;
-
-    while (file.tellg() < static_cast<std::streampos>(metadata_offset_)) {
-        uint64_t offset = file.tellg();
-
-        uint64_t seq;
-        EntryType type;
-        uint32_t keyLen, valueLen;
-
-        file.read(reinterpret_cast<char *>(&seq), sizeof(seq));
-        file.read(reinterpret_cast<char *>(&type), sizeof(type));
-        file.read(reinterpret_cast<char *>(&keyLen), sizeof(keyLen));
-        file.read(reinterpret_cast<char *>(&valueLen), sizeof(valueLen));
-
-        std::string key(keyLen, '\0');
-        file.read(&key[0], keyLen);
-
-        file.seekg(valueLen, std::ios::cur);
-
-        if (entry_count % INDEX_INTERVAL == 0) {
-            index_.push_back(IndexEntry{key, offset});
-        }
-        entry_count++;
-    }
-}
-
 const std::string &SSTable::filename() const {
     return path_;
 }
