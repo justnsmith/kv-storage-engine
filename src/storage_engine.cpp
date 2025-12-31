@@ -113,14 +113,6 @@ void StorageEngine::flush() {
     checkFlush(true);
 }
 
-void StorageEngine::clear() {
-    std::filesystem::remove_all("data");
-    memtable_.clear();
-    sstables_.clear();
-    flush_counter_ = 0;
-    seq_number_ = 1;
-}
-
 void StorageEngine::recover() {
     uint64_t maxSeqNumber = seq_number_;
 
@@ -167,7 +159,7 @@ void StorageEngine::handleCommand(const std::string &input) {
         break;
     }
     case Operation::CLEAR: {
-        clear();
+        clearData();
         break;
     }
     case Operation::DELETE:
@@ -222,6 +214,10 @@ void StorageEngine::clearData() {
     } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "Filesystem error: " << e.what() << std::endl;
     }
+    memtable_.clear();
+    sstables_.clear();
+    flush_counter_ = 0;
+    seq_number_ = 1;
 }
 
 void StorageEngine::checkCompaction() {

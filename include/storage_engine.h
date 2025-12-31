@@ -31,7 +31,6 @@ class StorageEngine {
     bool get(const std::string &key, Entry &out) const;
     void ls() const;
     void flush();
-    void clear();
     void handleCommand(const std::string &input);
 
     void recover();
