@@ -195,7 +195,7 @@ void StorageEngine::checkFlush(bool debug) {
         flush_counter_++;
 
         SSTable newSSTable = SSTable::flush(currentMemTable, dir_path, flush_counter_);
-        sstables_.push_back(newSSTable);
+        sstables_.push_back(std::move(newSSTable));
 
         std::remove("data/log.bin");
 
@@ -232,6 +232,9 @@ void StorageEngine::checkCompaction() {
 
     std::cout << "Merging...\n";
 
+    // Collect all of the merged data
+    std::map<std::string, Entry> merged_data;
+
     std::vector<SSTable::Iterator> iters;
     std::transform(sstables_.begin(), sstables_.end(), std::back_inserter(iters),
                    [](const auto &sstable) { return SSTable::Iterator(sstable); });
@@ -253,14 +256,6 @@ void StorageEngine::checkCompaction() {
             pq.emplace(e.key, e.seq, e.type, i);
         }
     }
-
-    std::string full_path = "data/sstables/sstable_" + std::to_string(++flush_counter_) + ".bin";
-    std::ofstream sstableFile(full_path, std::ios::out | std::ios::binary);
-    if (!sstableFile) {
-        throw std::runtime_error("Failed to open SSTable file " + full_path);
-    }
-
-    std::string minKey, maxKey;
 
     while (!pq.empty()) {
         auto [key, seq, type, idx] = pq.top();
@@ -285,22 +280,9 @@ void StorageEngine::checkCompaction() {
         }
 
         if (highestType == EntryType::PUT) {
-            uint32_t keyLen = key.size();
-            uint32_t valueLen = highestValue.size();
-            uint8_t typeByte = static_cast<uint8_t>(EntryType::PUT);
-
-            sstableFile.write(reinterpret_cast<const char *>(&highestSeq), sizeof(highestSeq));
-            sstableFile.write(reinterpret_cast<const char *>(&typeByte), sizeof(typeByte));
-            sstableFile.write(reinterpret_cast<const char *>(&keyLen), sizeof(keyLen));
-            sstableFile.write(reinterpret_cast<const char *>(&valueLen), sizeof(valueLen));
-            sstableFile.write(key.data(), keyLen);
-            sstableFile.write(highestValue.data(), valueLen);
-
-            if (minKey.empty() || key < minKey)
-                minKey = key;
-            if (maxKey.empty() || key > maxKey)
-                maxKey = key;
+            merged_data[key] = Entry{highestValue, highestSeq, highestType};
         }
+
         for (size_t i : sameKeyIndices) {
             iters[i].next();
             if (iters[i].valid()) {
@@ -310,28 +292,21 @@ void StorageEngine::checkCompaction() {
         }
     }
 
-    // Write metadata
-    uint32_t minKeyLen = minKey.size();
-    uint32_t maxKeyLen = maxKey.size();
-    uint64_t metadataOffset = sstableFile.tellp();
-
-    sstableFile.write(reinterpret_cast<const char *>(&minKeyLen), sizeof(minKeyLen));
-    sstableFile.write(reinterpret_cast<const char *>(&maxKeyLen), sizeof(maxKeyLen));
-    sstableFile.write(minKey.data(), minKeyLen);
-    sstableFile.write(maxKey.data(), maxKeyLen);
-    sstableFile.write(reinterpret_cast<const char *>(&metadataOffset), sizeof(metadataOffset));
-
-    sstableFile.close();
-
-    // Removing old SSTables
+    // Remove the old SStables that were compacted
     for (const auto &sstable : sstables_) {
         std::filesystem::remove(sstable.filename());
     }
 
-    // Replacing with the new merged SSTable
-    sstables_.clear();
-    sstables_.emplace_back(full_path);
+    // Use SSTable::flush to write with the bloom filter and index
+    const std::string dir_path = "data/sstables/";
+    flush_counter_++;
 
+    SSTable newSSTable = SSTable::flush(merged_data, dir_path, flush_counter_);
+
+    sstables_.clear();
+    sstables_.push_back(std::move(newSSTable));
+
+    // Update metadata
     std::ofstream metadataFile("data/metadata.txt");
     metadataFile << flush_counter_ << '\n';
     metadataFile << seq_number_;
