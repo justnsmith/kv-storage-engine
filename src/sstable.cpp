@@ -16,9 +16,13 @@ SSTable SSTable::flush(const std::map<std::string, Entry> &snapshot, const std::
         throw std::runtime_error("Failed to open SSTable file: " + full_path);
     }
 
+    table.bloom_filter_ = std::make_unique<BloomFilter>(snapshot.size(), BLOOM_FP_RATE);
+
     size_t entry_count = 0;
 
     for (const auto &[k, v] : snapshot) {
+
+        table.bloom_filter_->add(k);
 
         if (entry_count % INDEX_INTERVAL == 0) {
             uint64_t offset = sstableFile.tellp();
@@ -64,6 +68,12 @@ SSTable SSTable::flush(const std::map<std::string, Entry> &snapshot, const std::
         sstableFile.write(reinterpret_cast<const char *>(&entry.offset), sizeof(entry.offset));
     }
 
+    // Write bloom filter
+    std::vector<uint8_t> bloom_data = table.bloom_filter_->serialize();
+    uint32_t bloomSize = bloom_data.size();
+    sstableFile.write(reinterpret_cast<const char *>(&bloomSize), sizeof(bloomSize));
+    sstableFile.write(reinterpret_cast<const char *>(bloom_data.data()), bloomSize);
+
     sstableFile.write(reinterpret_cast<const char *>(&table.metadata_offset_), sizeof(table.metadata_offset_));
 
     return table;
@@ -71,6 +81,10 @@ SSTable SSTable::flush(const std::map<std::string, Entry> &snapshot, const std::
 
 std::optional<Entry> SSTable::get(const std::string &key) const {
     if (key < min_key_ || key > max_key_) {
+        return std::nullopt;
+    }
+
+    if (bloom_filter_ && !bloom_filter_->contains(key)) {
         return std::nullopt;
     }
 
@@ -170,9 +184,11 @@ void SSTable::loadMetadata() {
 
     uint32_t minKeyLen, maxKeyLen;
     sstableFile.read(reinterpret_cast<char *>(&minKeyLen), sizeof(minKeyLen));
-    min_key_.resize(minKeyLen);
     sstableFile.read(reinterpret_cast<char *>(&maxKeyLen), sizeof(maxKeyLen));
+
+    min_key_.resize(minKeyLen);
     max_key_.resize(maxKeyLen);
+
     sstableFile.read(&min_key_[0], minKeyLen);
     sstableFile.read(&max_key_[0], maxKeyLen);
 
@@ -193,9 +209,19 @@ void SSTable::loadMetadata() {
         index_.push_back(IndexEntry{key, offset});
     }
 
+    // Read bloom filter
+    uint32_t bloomSize;
+    sstableFile.read(reinterpret_cast<char *>(&bloomSize), sizeof(bloomSize));
+
+    std::vector<uint8_t> bloom_data(bloomSize);
+    sstableFile.read(reinterpret_cast<char *>(bloom_data.data()), bloomSize);
+
+    bloom_filter_ = std::make_unique<BloomFilter>(BloomFilter::deserialize(bloom_data));
+
     std::cout << "MIN KEY: " << min_key_ << std::endl;
     std::cout << "MAX KEY: " << max_key_ << std::endl;
     std::cout << "INDEX SIZE: " << index_.size() << " entries" << std::endl;
+    std::cout << "BLOOM FILTER SIZE: " << bloom_filter_->size() << " bits" << std::endl;
 }
 
 void SSTable::buildIndex() {

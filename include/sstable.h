@@ -1,6 +1,7 @@
 #ifndef SSTABLE_H
 #define SSTABLE_H
 
+#include "bloom_filter.h"
 #include "types.h"
 #include <cstddef>
 #include <cstdint>
@@ -55,8 +56,10 @@ class SSTable {
     std::string max_key_;
     uint64_t metadata_offset_;
     std::vector<IndexEntry> index_;
+    std::unique_ptr<BloomFilter> bloom_filter_;
 
     static constexpr size_t INDEX_INTERVAL = 16;
+    static constexpr double BLOOM_FP_RATE = 0.01;
 
     void loadMetadata();
     void buildIndex();
