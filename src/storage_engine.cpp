@@ -5,6 +5,7 @@ StorageEngine::StorageEngine(const std::string &wal_path) : wal_(wal_path), memt
 
     if (!metadataFile) {
         flush_counter_ = 0;
+        levels_.resize(4);
     } else {
         std::string line;
         std::getline(metadataFile, line);
@@ -14,11 +15,51 @@ StorageEngine::StorageEngine(const std::string &wal_path) : wal_(wal_path), memt
         std::getline(metadataFile, line);
         uint64_t seqNumber = stoull(line);
         seq_number_ = seqNumber;
+
+        loadLevelMetadata();
     }
 
-    for (uint64_t i = 1; i <= flush_counter_; i++) {
-        std::string path = "data/sstables/sstable_" + std::to_string(i) + ".bin";
-        sstables_.emplace_back(path);
+    loadSSTables();
+}
+
+void StorageEngine::loadLevelMetadata() {
+    std::ifstream levelFile("data/levels.txt");
+    if (!levelFile) {
+        levels_.resize(4);
+        return;
+    }
+
+    levels_.clear();
+    std::string line;
+
+    while (std::getline(levelFile, line)) {
+        if (line.empty())
+            continue;
+
+        std::istringstream iss(line);
+        SSTableMeta meta;
+        iss >> meta.id >> meta.level >> meta.minKey >> meta.maxKey >> meta.maxSeq >> meta.sizeBytes;
+
+        if (meta.level >= levels_.size()) {
+            levels_.resize(meta.level + 1);
+        }
+
+        levels_[meta.level].push_back(meta);
+    }
+}
+
+void StorageEngine::loadSSTables() {
+    sstables_.clear();
+
+    for (const auto &levelMetas : levels_) {
+        for (const auto &meta : levelMetas) {
+            std::string path = "data/sstables/sstable_" + std::to_string(meta.id) + ".bin";
+            if (std::filesystem::exists(path)) {
+                sstables_.emplace_back(path);
+            } else {
+                std::cerr << "Warning: SSTable file was not found: " << path << '\n';
+            }
+        }
     }
 }
 
@@ -55,20 +96,48 @@ bool StorageEngine::get(const std::string &key, Entry &out) const {
         candidate = mem;
     }
 
-    for (size_t i = sstables_.size(); i-- > 0;) {
-        std::optional<Entry> record = sstables_[i].get(key);
-        if (record != std::nullopt) {
-            if (!candidate || record->seq > candidate->seq) {
-                candidate = *record;
+    // Search through the levels
+    for (uint32_t level = 0; level < levels_.size(); level++) {
+        if (levels_[level].empty())
+            continue;
+
+        if (level == 0) {
+            // L0: Have to check all the files since there are overlapping ranges
+            for (const auto &meta : levels_[0]) {
+                auto it = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &sst) {
+                    return sst.filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos;
+                });
+
+                if (it != sstables_.end()) {
+                    std::optional<Entry> record = it->get(key);
+                    if (record && (!candidate || record->seq > candidate->seq)) {
+                        candidate = *record;
+                    }
+                }
             }
-            break;
+        } else {
+            // L1+: binary search to find correct file
+            auto it = std::lower_bound(levels_[level].begin(), levels_[level].end(), key,
+                                       [](const SSTableMeta &meta, const std::string &k) { return meta.maxKey < k; });
+
+            if (it != levels_[level].end() && key >= it->minKey) {
+                auto sstIt = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &sst) {
+                    return sst.filename().find("_" + std::to_string(it->id) + ".") != std::string::npos;
+                });
+
+                if (sstIt != sstables_.end()) {
+                    std::optional<Entry> record = sstIt->get(key);
+                    if (record) {
+                        candidate = *record;
+                        break; // Found in the current level, dont need to check deeper
+                    }
+                }
+            }
         }
+        if (candidate)
+            break;
     }
-
-    if (!candidate)
-        return false;
-
-    if (candidate->type == EntryType::DELETE) {
+    if (!candidate || candidate->type == EntryType::DELETE) {
         return false;
     }
 
@@ -174,14 +243,9 @@ void StorageEngine::checkFlush(bool debug) {
     static constexpr size_t kMemTableThreshold = 8 * 1024 * 1024;
     // Check if memtable is greater than 8MB
     if (memtable_.getSize() >= kMemTableThreshold || debug) {
-        std::map<std::string, Entry> currentMemTable;
+        std::cout << "DEBUG: Flushing memtable to L0\n";
 
-        std::cout << "DEBUG: Memtable is greater than threshold\n";
-
-        for (const auto &[k, v] : memtable_.snapshot()) {
-            currentMemTable[k] = v;
-        }
-
+        std::map<std::string, Entry> currentMemTable = memtable_.snapshot();
         const std::string dir_path = "data/sstables/";
 
         flush_counter_++;
@@ -189,14 +253,24 @@ void StorageEngine::checkFlush(bool debug) {
         SSTable newSSTable = SSTable::flush(currentMemTable, dir_path, flush_counter_);
         sstables_.push_back(std::move(newSSTable));
 
-        std::remove("data/log.bin");
+        SSTableMeta meta;
+        meta.id = flush_counter_;
+        meta.level = 0;
+        meta.minKey = currentMemTable.begin()->first;
+        meta.maxKey = currentMemTable.rbegin()->first;
+        meta.maxSeq = seq_number_ - 1;
+        meta.sizeBytes = std::filesystem::file_size(dir_path + "sstable_" + std::to_string(flush_counter_) + ".bin");
 
-        std::ofstream metadataFile("data/metadata.txt");
-        metadataFile << flush_counter_ << '\n';
-        metadataFile << seq_number_;
+        if (levels_.empty())
+            levels_.resize(4);
+
+        levels_[0].push_back(meta);
+
+        std::remove("data/log.bin");
+        saveMetadata();
 
         memtable_.clear();
-        checkCompaction();
+        maybeCompact();
     }
 }
 
@@ -220,22 +294,138 @@ void StorageEngine::clearData() {
     seq_number_ = 1;
 }
 
-void StorageEngine::checkCompaction() {
-    // Only compact if there are 4 or more SStables
-    if (sstables_.size() < 4) {
+void StorageEngine::maybeCompact() {
+    // Check each of the levels starting from L0
+    for (uint32_t level = 0; level < levels_.size() - 1; level++) {
+        if (shouldCompact(level)) {
+            maybeCompactLevel(level);
+        }
+    }
+}
+
+bool StorageEngine::shouldCompact(uint32_t level) {
+    if (level >= levels_.size() || levels_[level].empty()) {
+        return false;
+    }
+
+    if (level == 0) {
+        return levels_[0].size() >= 4;
+    }
+
+    static const std::vector<uint64_t> klevelSizes = {
+        0,                 // L0 (uses file count)
+        10 * 1024 * 1024,  // L1: 10 MB
+        100 * 1024 * 1024, // L2: 100 MB
+        1024 * 1024 * 1024 // L3: 1 GB
+    };
+
+    if (level >= klevelSizes.size()) {
+        return false;
+    }
+
+    uint64_t totalSize = 0;
+    for (const auto &meta : levels_[level]) {
+        totalSize += meta.sizeBytes;
+    }
+
+    return totalSize > klevelSizes[level];
+}
+
+void StorageEngine::maybeCompactLevel(uint32_t level) {
+    if (level == 0) {
+        compactL0toL1();
+    } else {
+        compactlevelN(level);
+    }
+}
+
+void StorageEngine::saveMetadata() {
+    std::ofstream metadataFile("data/metadata.txt");
+    if (!metadataFile) {
+        std::cerr << "Error: Could not open metadata.txt" << '\n';
         return;
     }
 
-    std::cout << "Merging...\n";
+    metadataFile << flush_counter_ << '\n';
+    metadataFile << seq_number_ << '\n';
+    metadataFile.close();
 
-    // Collect all of the merged data
-    std::map<std::string, Entry> merged_data;
+    std::ofstream levelFile("data/levels.txt");
+    if (!levelFile) {
+        std::cerr << "Error cold not open levels.txt" << '\n';
+        return;
+    }
 
+    for (uint32_t level = 0; level < levels_.size(); level++) {
+        for (const auto &meta : levels_[level]) {
+            levelFile << meta.id << ' ' << meta.level << ' ' << meta.minKey << ' ' << meta.maxKey << ' ' << meta.maxSeq << ' '
+                      << meta.sizeBytes << '\n';
+        }
+    }
+    levelFile.close();
+}
+
+void StorageEngine::compactL0toL1() {
+    std::cout << "Compacting L0 -> L1\n";
+
+    if (levels_[0].empty())
+        return;
+
+    // Find the key range of all L0 files
+    std::string minKey = levels_[0][0].minKey;
+    std::string maxKey = levels_[0][0].maxKey;
+    for (const auto &meta : levels_[0]) {
+        if (meta.minKey < minKey)
+            minKey = meta.minKey;
+        if (meta.maxKey > maxKey)
+            maxKey = meta.maxKey;
+    }
+
+    // Collect L0 SSTables
+    std::vector<size_t> l0Indices;
+    for (size_t i = 0; i < sstables_.size(); i++) {
+        for (const auto &meta : levels_[0]) {
+            if (sstables_[i].filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos) {
+                l0Indices.push_back(i);
+                break;
+            }
+        }
+    }
+
+    // Find overlapping L1 files
+    std::vector<size_t> l1SSTIndices;
+    std::vector<size_t> l1MetaIndices;
+
+    if (levels_.size() > 1) {
+        for (size_t i = 0; i < levels_[1].size(); i++) {
+            const auto &meta = levels_[1][i];
+            // Check for overlap: [minKey, maxKey] overlaps with [meta.minKey, meta.maxKey]
+            if (!(meta.maxKey < minKey || meta.minKey > maxKey)) {
+                // Find corresponding SSTable
+                for (size_t j = 0; j < sstables_.size(); j++) {
+                    if (sstables_[j].filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos) {
+                        l1SSTIndices.push_back(j);
+                        l1MetaIndices.push_back(i);
+                        break;
+                    }
+                }
+            }
+        }
+    } else {
+        levels_.resize(std::max(2UL, levels_.size()));
+    }
+
+    // Collect all indices to merge
+    std::vector<size_t> allIndices = l0Indices;
+    allIndices.insert(allIndices.end(), l1SSTIndices.begin(), l1SSTIndices.end());
+
+    // Create iterators for all tables to merge
     std::vector<SSTable::Iterator> iters;
-    std::transform(sstables_.begin(), sstables_.end(), std::back_inserter(iters),
-                   [](const auto &sstable) { return SSTable::Iterator(sstable); });
+    for (size_t idx : allIndices) {
+        iters.emplace_back(sstables_[idx]);
+    }
 
-    // Priority queue element: (key, seq, iterator index)
+    // Priority queue for merging: (key, seq, type, iterator index)
     using HeapElement = std::tuple<std::string, uint64_t, EntryType, size_t>;
     auto cmp = [](const HeapElement &a, const HeapElement &b) {
         if (std::get<0>(a) != std::get<0>(b)) {
@@ -246,12 +436,187 @@ void StorageEngine::checkCompaction() {
 
     std::priority_queue<HeapElement, std::vector<HeapElement>, decltype(cmp)> pq(cmp);
 
+    // Initialize priority queue
     for (size_t i = 0; i < iters.size(); i++) {
         if (iters[i].valid()) {
             const auto &e = iters[i].entry();
             pq.emplace(e.key, e.seq, e.type, i);
         }
     }
+
+    // Merge all entries
+    std::map<std::string, Entry> merged_data;
+
+    while (!pq.empty()) {
+        auto [key, seq, type, idx] = pq.top();
+        pq.pop();
+
+        uint64_t highestSeq = seq;
+        EntryType highestType = type;
+        std::string highestValue = iters[idx].entry().value;
+
+        std::vector<size_t> sameKeyIndices = {idx};
+
+        // Collect all entries with the same key
+        while (!pq.empty() && std::get<0>(pq.top()) == key) {
+            auto [_, s, t, i] = pq.top();
+            pq.pop();
+            sameKeyIndices.push_back(i);
+
+            if (s > highestSeq) {
+                highestSeq = s;
+                highestType = t;
+                highestValue = iters[i].entry().value;
+            }
+        }
+
+        // Only keep PUT entries
+        if (highestType == EntryType::PUT) {
+            merged_data[key] = Entry{highestValue, highestSeq, highestType};
+        }
+
+        // Advance all iterators that had this key
+        for (size_t i : sameKeyIndices) {
+            iters[i].next();
+            if (iters[i].valid()) {
+                const auto &e = iters[i].entry();
+                pq.emplace(e.key, e.seq, e.type, i);
+            }
+        }
+    }
+
+    // Delete old SSTable files
+    for (const auto &meta : levels_[0]) {
+        std::filesystem::remove("data/sstables/sstable_" + std::to_string(meta.id) + ".bin");
+    }
+
+    for (size_t idx : l1MetaIndices) {
+        std::filesystem::remove("data/sstables/sstable_" + std::to_string(levels_[1][idx].id) + ".bin");
+    }
+
+    // Remove from sstables_ vector
+    std::vector<size_t> allIndicesToRemove = allIndices;
+    std::sort(allIndicesToRemove.rbegin(), allIndicesToRemove.rend());
+    for (size_t idx : allIndicesToRemove) {
+        sstables_.erase(sstables_.begin() + idx);
+    }
+
+    // Write new L1 SSTable
+    const std::string dir_path = "data/sstables/";
+    flush_counter_++;
+
+    SSTable newSSTable = SSTable::flush(merged_data, dir_path, flush_counter_);
+    sstables_.push_back(std::move(newSSTable));
+
+    // Create new metadata
+    SSTableMeta newMeta;
+    newMeta.id = flush_counter_;
+    newMeta.level = 1;
+    newMeta.minKey = merged_data.begin()->first;
+    newMeta.maxKey = merged_data.rbegin()->first;
+    newMeta.maxSeq = seq_number_ - 1;
+    newMeta.sizeBytes = std::filesystem::file_size(dir_path + "sstable_" + std::to_string(flush_counter_) + ".bin");
+
+    levels_[0].clear();
+
+    // Remove merged L1 files from metadata
+    std::sort(l1MetaIndices.rbegin(), l1MetaIndices.rend());
+    for (size_t idx : l1MetaIndices) {
+        levels_[1].erase(levels_[1].begin() + idx);
+    }
+
+    // Add new L1 file and sort by minKey
+    levels_[1].push_back(newMeta);
+    std::sort(levels_[1].begin(), levels_[1].end(), [](const SSTableMeta &a, const SSTableMeta &b) { return a.minKey < b.minKey; });
+
+    // Save metadata
+    saveMetadata();
+
+    std::cout << "Compaction complete. New L1 file: " << newMeta.id << "\n";
+}
+
+void StorageEngine::compactlevelN(uint32_t level) {
+    if (level == 0 || level >= levels_.size() - 1)
+        return;
+
+    std::cout << "Compacting L" << level << " -> L" << (level + 1) << "\n";
+
+    // Pick one file from level N to compact
+    if (levels_[level].empty())
+        return;
+
+    const SSTableMeta &srcMeta = levels_[level][0];
+    size_t srcMetaIdx = 0;
+
+    // Find the SSTable in sstables_ vector
+    size_t srcSSTIdx = SIZE_MAX;
+    for (size_t i = 0; i < sstables_.size(); i++) {
+        if (sstables_[i].filename().find("_" + std::to_string(srcMeta.id) + ".") != std::string::npos) {
+            srcSSTIdx = i;
+            break;
+        }
+    }
+
+    if (srcSSTIdx == SIZE_MAX) {
+        std::cerr << "Error: Could not find SSTable for level " << level << "\n";
+        return;
+    }
+
+    // Ensure level+1 exists
+    if (levels_.size() <= level + 1) {
+        levels_.resize(level + 2);
+    }
+
+    // Find overlapping files in level N+1
+    std::vector<size_t> nextLevelSSTIndices;
+    std::vector<size_t> nextLevelMetaIndices;
+
+    for (size_t i = 0; i < levels_[level + 1].size(); i++) {
+        const auto &meta = levels_[level + 1][i];
+        // Check for overlap
+        if (!(meta.maxKey < srcMeta.minKey || meta.minKey > srcMeta.maxKey)) {
+            // Find corresponding SSTable
+            for (size_t j = 0; j < sstables_.size(); j++) {
+                if (sstables_[j].filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos) {
+                    nextLevelSSTIndices.push_back(j);
+                    nextLevelMetaIndices.push_back(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Collect all indices to merge
+    std::vector<size_t> allIndices = {srcSSTIdx};
+    allIndices.insert(allIndices.end(), nextLevelSSTIndices.begin(), nextLevelSSTIndices.end());
+
+    // Create iterators for merge
+    std::vector<SSTable::Iterator> iters;
+    for (size_t idx : allIndices) {
+        iters.emplace_back(sstables_[idx]);
+    }
+
+    // Priority queue for merging
+    using HeapElement = std::tuple<std::string, uint64_t, EntryType, size_t>;
+    auto cmp = [](const HeapElement &a, const HeapElement &b) {
+        if (std::get<0>(a) != std::get<0>(b)) {
+            return std::get<0>(a) > std::get<0>(b);
+        }
+        return std::get<1>(a) < std::get<1>(b);
+    };
+
+    std::priority_queue<HeapElement, std::vector<HeapElement>, decltype(cmp)> pq(cmp);
+
+    // Initialize priority queue
+    for (size_t i = 0; i < iters.size(); i++) {
+        if (iters[i].valid()) {
+            const auto &e = iters[i].entry();
+            pq.emplace(e.key, e.seq, e.type, i);
+        }
+    }
+
+    // Merge entries
+    std::map<std::string, Entry> merged_data;
 
     while (!pq.empty()) {
         auto [key, seq, type, idx] = pq.top();
@@ -275,6 +640,7 @@ void StorageEngine::checkCompaction() {
             }
         }
 
+        // Only keep PUT entries
         if (highestType == EntryType::PUT) {
             merged_data[key] = Entry{highestValue, highestSeq, highestType};
         }
@@ -288,22 +654,51 @@ void StorageEngine::checkCompaction() {
         }
     }
 
-    // Remove the old SStables that were compacted
-    for (const auto &sstable : sstables_) {
-        std::filesystem::remove(sstable.filename());
+    // Delete old SSTable files
+    std::filesystem::remove("data/sstables/sstable_" + std::to_string(srcMeta.id) + ".bin");
+
+    for (size_t idx : nextLevelMetaIndices) {
+        std::filesystem::remove("data/sstables/sstable_" + std::to_string(levels_[level + 1][idx].id) + ".bin");
     }
 
-    // Use SSTable::flush to write with the bloom filter and index
+    // Remove from sstables_ vector
+    std::sort(allIndices.rbegin(), allIndices.rend());
+    for (size_t idx : allIndices) {
+        sstables_.erase(sstables_.begin() + idx);
+    }
+
+    // Write new SSTable(s) to level N+1
     const std::string dir_path = "data/sstables/";
     flush_counter_++;
 
     SSTable newSSTable = SSTable::flush(merged_data, dir_path, flush_counter_);
-
-    sstables_.clear();
     sstables_.push_back(std::move(newSSTable));
 
-    // Update metadata
-    std::ofstream metadataFile("data/metadata.txt");
-    metadataFile << flush_counter_ << '\n';
-    metadataFile << seq_number_;
+    // Create new metadata
+    SSTableMeta newMeta;
+    newMeta.id = flush_counter_;
+    newMeta.level = level + 1;
+    newMeta.minKey = merged_data.begin()->first;
+    newMeta.maxKey = merged_data.rbegin()->first;
+    newMeta.maxSeq = seq_number_ - 1;
+    newMeta.sizeBytes = std::filesystem::file_size(dir_path + "sstable_" + std::to_string(flush_counter_) + ".bin");
+
+    // Remove source file from level N
+    levels_[level].erase(levels_[level].begin() + srcMetaIdx);
+
+    // Remove merged files from level N+1
+    std::sort(nextLevelMetaIndices.rbegin(), nextLevelMetaIndices.rend());
+    for (size_t idx : nextLevelMetaIndices) {
+        levels_[level + 1].erase(levels_[level + 1].begin() + idx);
+    }
+
+    // Add new file to level N+1 and sort
+    levels_[level + 1].push_back(newMeta);
+    std::sort(levels_[level + 1].begin(), levels_[level + 1].end(),
+              [](const SSTableMeta &a, const SSTableMeta &b) { return a.minKey < b.minKey; });
+
+    // Save metadata
+    saveMetadata();
+
+    std::cout << "Compaction complete. New L" << (level + 1) << " file: " << newMeta.id << "\n";
 }
