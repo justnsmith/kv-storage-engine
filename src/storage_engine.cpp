@@ -292,13 +292,19 @@ void StorageEngine::clearData() {
     sstables_.clear();
     flush_counter_ = 0;
     seq_number_ = 1;
+    levels_.clear();
+    levels_.resize(4);
 }
 
 void StorageEngine::maybeCompact() {
     // Check each of the levels starting from L0
     for (uint32_t level = 0; level < levels_.size() - 1; level++) {
         if (shouldCompact(level)) {
-            maybeCompactLevel(level);
+            if (level == 0) {
+                compactL0toL1();
+            } else {
+                compactlevelN(level);
+            }
         }
     }
 }
@@ -323,20 +329,10 @@ bool StorageEngine::shouldCompact(uint32_t level) {
         return false;
     }
 
-    uint64_t totalSize = 0;
-    for (const auto &meta : levels_[level]) {
-        totalSize += meta.sizeBytes;
-    }
+    uint64_t totalSize = std::accumulate(levels_[level].begin(), levels_[level].end(), uint64_t{0},
+                                         [](uint64_t sum, const SSTableMeta &meta) { return sum + meta.sizeBytes; });
 
     return totalSize > klevelSizes[level];
-}
-
-void StorageEngine::maybeCompactLevel(uint32_t level) {
-    if (level == 0) {
-        compactL0toL1();
-    } else {
-        compactlevelN(level);
-    }
 }
 
 void StorageEngine::saveMetadata() {
@@ -384,11 +380,14 @@ void StorageEngine::compactL0toL1() {
     // Collect L0 SSTables
     std::vector<size_t> l0Indices;
     for (size_t i = 0; i < sstables_.size(); i++) {
-        for (const auto &meta : levels_[0]) {
-            if (sstables_[i].filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos) {
-                l0Indices.push_back(i);
-                break;
-            }
+        const auto &fname = sstables_[i].filename();
+
+        bool isL0 = std::any_of(levels_[0].begin(), levels_[0].end(), [&](const SSTableMeta &meta) {
+            return fname.find("_" + std::to_string(meta.id) + ".") != std::string::npos;
+        });
+
+        if (isL0) {
+            l0Indices.push_back(i);
         }
     }
 
@@ -399,15 +398,18 @@ void StorageEngine::compactL0toL1() {
     if (levels_.size() > 1) {
         for (size_t i = 0; i < levels_[1].size(); i++) {
             const auto &meta = levels_[1][i];
+
             // Check for overlap: [minKey, maxKey] overlaps with [meta.minKey, meta.maxKey]
             if (!(meta.maxKey < minKey || meta.minKey > maxKey)) {
-                // Find corresponding SSTable
-                for (size_t j = 0; j < sstables_.size(); j++) {
-                    if (sstables_[j].filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos) {
-                        l1SSTIndices.push_back(j);
-                        l1MetaIndices.push_back(i);
-                        break;
-                    }
+
+                auto it = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &table) {
+                    return table.filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos;
+                });
+
+                if (it != sstables_.end()) {
+                    size_t j = std::distance(sstables_.begin(), it);
+                    l1SSTIndices.push_back(j);
+                    l1MetaIndices.push_back(i);
                 }
             }
         }
@@ -421,9 +423,10 @@ void StorageEngine::compactL0toL1() {
 
     // Create iterators for all tables to merge
     std::vector<SSTable::Iterator> iters;
-    for (size_t idx : allIndices) {
-        iters.emplace_back(sstables_[idx]);
-    }
+    iters.reserve(allIndices.size());
+
+    std::transform(allIndices.begin(), allIndices.end(), std::back_inserter(iters),
+                   [&](size_t idx) { return SSTable::Iterator{sstables_[idx]}; });
 
     // Priority queue for merging: (key, seq, type, iterator index)
     using HeapElement = std::tuple<std::string, uint64_t, EntryType, size_t>;
@@ -550,11 +553,12 @@ void StorageEngine::compactlevelN(uint32_t level) {
 
     // Find the SSTable in sstables_ vector
     size_t srcSSTIdx = SIZE_MAX;
-    for (size_t i = 0; i < sstables_.size(); i++) {
-        if (sstables_[i].filename().find("_" + std::to_string(srcMeta.id) + ".") != std::string::npos) {
-            srcSSTIdx = i;
-            break;
-        }
+    auto it = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &table) {
+        return table.filename().find("_" + std::to_string(srcMeta.id) + ".") != std::string::npos;
+    });
+
+    if (it != sstables_.end()) {
+        srcSSTIdx = std::distance(sstables_.begin(), it);
     }
 
     if (srcSSTIdx == SIZE_MAX) {
@@ -573,15 +577,18 @@ void StorageEngine::compactlevelN(uint32_t level) {
 
     for (size_t i = 0; i < levels_[level + 1].size(); i++) {
         const auto &meta = levels_[level + 1][i];
+
         // Check for overlap
         if (!(meta.maxKey < srcMeta.minKey || meta.minKey > srcMeta.maxKey)) {
-            // Find corresponding SSTable
-            for (size_t j = 0; j < sstables_.size(); j++) {
-                if (sstables_[j].filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos) {
-                    nextLevelSSTIndices.push_back(j);
-                    nextLevelMetaIndices.push_back(i);
-                    break;
-                }
+
+            auto foundIt = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &table) {
+                return table.filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos;
+            });
+
+            if (foundIt != sstables_.end()) {
+                size_t j = std::distance(sstables_.begin(), it);
+                nextLevelSSTIndices.push_back(j);
+                nextLevelMetaIndices.push_back(i);
             }
         }
     }
@@ -592,9 +599,10 @@ void StorageEngine::compactlevelN(uint32_t level) {
 
     // Create iterators for merge
     std::vector<SSTable::Iterator> iters;
-    for (size_t idx : allIndices) {
-        iters.emplace_back(sstables_[idx]);
-    }
+    iters.reserve(allIndices.size());
+
+    std::transform(allIndices.begin(), allIndices.end(), std::back_inserter(iters),
+                   [&](size_t idx) { return SSTable::Iterator{sstables_[idx]}; });
 
     // Priority queue for merging
     using HeapElement = std::tuple<std::string, uint64_t, EntryType, size_t>;

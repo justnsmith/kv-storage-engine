@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <queue>
 #include <string>
@@ -45,11 +46,10 @@ class StorageEngine {
     uint64_t seq_number_;
 
     void checkFlush(bool debug = false);
-    void maybeCompactLevel(uint32_t level);
-    void maybeCompact();
     bool shouldCompact(uint32_t level);
-    void compactL0toL1();
     void compactlevelN(uint32_t level);
+    void maybeCompact();
+    void compactL0toL1();
     void loadLevelMetadata();
     void loadSSTables();
     void saveMetadata();
