@@ -26,4 +26,13 @@ struct IndexEntry {
     uint64_t offset;
 };
 
+struct SSTableMeta {
+    uint64_t id;
+    std::string minKey;
+    std::string maxKey;
+    uint64_t maxSeq;
+    uint64_t sizeBytes;
+    uint32_t level;
+};
+
 #endif
