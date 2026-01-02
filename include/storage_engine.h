@@ -2,6 +2,7 @@
 #define STORAGE_ENGINE_H
 
 #include "command_parser.h"
+#include "lru_cache.h"
 #include "memtable.h"
 #include "sstable.h"
 #include "types.h"
@@ -25,7 +26,7 @@ class MemTable;
 
 class StorageEngine {
   public:
-    explicit StorageEngine(const std::string &wal_path);
+    explicit StorageEngine(const std::string &wal_path, size_t cache_size = 1000);
 
     bool put(const std::string &key, const std::string &value);
     bool del(const std::string &key);
@@ -44,6 +45,8 @@ class StorageEngine {
     std::vector<std::vector<SSTableMeta>> levels_;
     uint64_t flush_counter_;
     uint64_t seq_number_;
+
+    mutable std::optional<LRUCache> cache_;
 
     void checkFlush(bool debug = false);
     bool shouldCompact(uint32_t level);

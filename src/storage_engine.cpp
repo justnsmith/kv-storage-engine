@@ -1,6 +1,12 @@
 #include "storage_engine.h"
 
-StorageEngine::StorageEngine(const std::string &wal_path) : wal_(wal_path), memtable_(), seq_number_(1) {
+StorageEngine::StorageEngine(const std::string &wal_path, size_t cache_size)
+    : wal_(wal_path), memtable_(), seq_number_(1) {
+
+    if (cache_size > 0) {
+        cache_ = LRUCache(cache_size);
+    }
+
     std::ifstream metadataFile("data/metadata.txt");
 
     if (!metadataFile) {
@@ -69,6 +75,10 @@ bool StorageEngine::put(const std::string &key, const std::string &value) {
         wal_.append(Operation::PUT, key, value, seq_number_);
         seq_number_++;
         result = true;
+
+        if (cache_) {
+            cache_->invalidate(key);
+        }
     }
     checkFlush();
     return result;
@@ -82,6 +92,10 @@ bool StorageEngine::del(const std::string &key) {
     wal_.append(Operation::DELETE, key, "", seq_number_);
     seq_number_++;
 
+    if (cache_) {
+        cache_->invalidate(key);
+    }
+
     checkFlush();
 
     std::cout << std::boolalpha << existed << std::endl;
@@ -89,6 +103,14 @@ bool StorageEngine::del(const std::string &key) {
 }
 
 bool StorageEngine::get(const std::string &key, Entry &out) const {
+    if (cache_) {
+        auto cached = cache_->get(key);
+        if (cached) {
+            out = *cached;
+            return true;
+        }
+    }
+
     std::optional<Entry> candidate{};
 
     Entry mem;
@@ -137,11 +159,17 @@ bool StorageEngine::get(const std::string &key, Entry &out) const {
         if (candidate)
             break;
     }
+
     if (!candidate || candidate->type == EntryType::DELETE) {
         return false;
     }
 
     out = *candidate;
+
+    if (cache_) {
+        cache_->put(key, out);
+    }
+
     return true;
 }
 
@@ -159,7 +187,7 @@ void StorageEngine::ls() const {
         const std::string path = sstables_[i].filename();
         if (!std::filesystem::exists(path)) {
             std::cerr << "Warning: SSTable file missing: " << path << ", skipping.\n";
-            continue; // Skip missing files
+            continue;
         }
 
         size_t underscorePos = path.rfind('_');
@@ -241,7 +269,6 @@ void StorageEngine::handleCommand(const std::string &input) {
 
 void StorageEngine::checkFlush(bool debug) {
     static constexpr size_t kMemTableThreshold = 8 * 1024 * 1024;
-    // Check if memtable is greater than 8MB
     if (memtable_.getSize() >= kMemTableThreshold || debug) {
         std::cout << "DEBUG: Flushing memtable to L0\n";
 
@@ -270,6 +297,12 @@ void StorageEngine::checkFlush(bool debug) {
         saveMetadata();
 
         memtable_.clear();
+
+        // Clear cache on flush since data moved to SSTable
+        if (cache_) {
+            cache_->clear();
+        }
+
         maybeCompact();
     }
 }
@@ -281,7 +314,6 @@ void StorageEngine::clearData() {
     try {
         if (std::filesystem::remove_all(dataPath) > 0) {
             memtable_.clear();
-            // std::cout << "Memory successfuly cleared" << std::endl;
         } else {
             std::cerr << "The folder was not found or something went wrong" << std::endl;
         }
@@ -294,10 +326,13 @@ void StorageEngine::clearData() {
     seq_number_ = 1;
     levels_.clear();
     levels_.resize(4);
+
+    if (cache_) {
+        cache_->clear();
+    }
 }
 
 void StorageEngine::maybeCompact() {
-    // Check each of the levels starting from L0
     for (uint32_t level = 0; level < levels_.size() - 1; level++) {
         if (shouldCompact(level)) {
             if (level == 0) {
@@ -319,10 +354,10 @@ bool StorageEngine::shouldCompact(uint32_t level) {
     }
 
     static const std::vector<uint64_t> klevelSizes = {
-        0,                 // L0 (uses file count)
-        10 * 1024 * 1024,  // L1: 10 MB
-        100 * 1024 * 1024, // L2: 100 MB
-        1024 * 1024 * 1024 // L3: 1 GB
+        0,
+        10 * 1024 * 1024,
+        100 * 1024 * 1024,
+        1024 * 1024 * 1024
     };
 
     if (level >= klevelSizes.size()) {
@@ -367,7 +402,6 @@ void StorageEngine::compactL0toL1() {
     if (levels_[0].empty())
         return;
 
-    // Find the key range of all L0 files
     std::string minKey = levels_[0][0].minKey;
     std::string maxKey = levels_[0][0].maxKey;
     for (const auto &meta : levels_[0]) {
@@ -377,7 +411,6 @@ void StorageEngine::compactL0toL1() {
             maxKey = meta.maxKey;
     }
 
-    // Collect L0 SSTables
     std::vector<size_t> l0Indices;
     for (size_t i = 0; i < sstables_.size(); i++) {
         const auto &fname = sstables_[i].filename();
@@ -391,7 +424,6 @@ void StorageEngine::compactL0toL1() {
         }
     }
 
-    // Find overlapping L1 files
     std::vector<size_t> l1SSTIndices;
     std::vector<size_t> l1MetaIndices;
 
@@ -399,7 +431,6 @@ void StorageEngine::compactL0toL1() {
         for (size_t i = 0; i < levels_[1].size(); i++) {
             const auto &meta = levels_[1][i];
 
-            // Check for overlap: [minKey, maxKey] overlaps with [meta.minKey, meta.maxKey]
             if (!(meta.maxKey < minKey || meta.minKey > maxKey)) {
 
                 auto it = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &table) {
@@ -417,18 +448,15 @@ void StorageEngine::compactL0toL1() {
         levels_.resize(std::max(2UL, levels_.size()));
     }
 
-    // Collect all indices to merge
     std::vector<size_t> allIndices = l0Indices;
     allIndices.insert(allIndices.end(), l1SSTIndices.begin(), l1SSTIndices.end());
 
-    // Create iterators for all tables to merge
     std::vector<SSTable::Iterator> iters;
     iters.reserve(allIndices.size());
 
     std::transform(allIndices.begin(), allIndices.end(), std::back_inserter(iters),
                    [&](size_t idx) { return SSTable::Iterator{sstables_[idx]}; });
 
-    // Priority queue for merging: (key, seq, type, iterator index)
     using HeapElement = std::tuple<std::string, uint64_t, EntryType, size_t>;
     auto cmp = [](const HeapElement &a, const HeapElement &b) {
         if (std::get<0>(a) != std::get<0>(b)) {
@@ -439,7 +467,6 @@ void StorageEngine::compactL0toL1() {
 
     std::priority_queue<HeapElement, std::vector<HeapElement>, decltype(cmp)> pq(cmp);
 
-    // Initialize priority queue
     for (size_t i = 0; i < iters.size(); i++) {
         if (iters[i].valid()) {
             const auto &e = iters[i].entry();
@@ -447,7 +474,6 @@ void StorageEngine::compactL0toL1() {
         }
     }
 
-    // Merge all entries
     std::map<std::string, Entry> merged_data;
 
     while (!pq.empty()) {
@@ -460,7 +486,6 @@ void StorageEngine::compactL0toL1() {
 
         std::vector<size_t> sameKeyIndices = {idx};
 
-        // Collect all entries with the same key
         while (!pq.empty() && std::get<0>(pq.top()) == key) {
             auto [_, s, t, i] = pq.top();
             pq.pop();
@@ -473,12 +498,10 @@ void StorageEngine::compactL0toL1() {
             }
         }
 
-        // Only keep PUT entries
         if (highestType == EntryType::PUT) {
             merged_data[key] = Entry{highestValue, highestSeq, highestType};
         }
 
-        // Advance all iterators that had this key
         for (size_t i : sameKeyIndices) {
             iters[i].next();
             if (iters[i].valid()) {
@@ -488,7 +511,6 @@ void StorageEngine::compactL0toL1() {
         }
     }
 
-    // Delete old SSTable files
     for (const auto &meta : levels_[0]) {
         std::filesystem::remove("data/sstables/sstable_" + std::to_string(meta.id) + ".bin");
     }
@@ -497,21 +519,18 @@ void StorageEngine::compactL0toL1() {
         std::filesystem::remove("data/sstables/sstable_" + std::to_string(levels_[1][idx].id) + ".bin");
     }
 
-    // Remove from sstables_ vector
     std::vector<size_t> allIndicesToRemove = allIndices;
     std::sort(allIndicesToRemove.rbegin(), allIndicesToRemove.rend());
     for (size_t idx : allIndicesToRemove) {
         sstables_.erase(sstables_.begin() + idx);
     }
 
-    // Write new L1 SSTable
     const std::string dir_path = "data/sstables/";
     flush_counter_++;
 
     SSTable newSSTable = SSTable::flush(merged_data, dir_path, flush_counter_);
     sstables_.push_back(std::move(newSSTable));
 
-    // Create new metadata
     SSTableMeta newMeta;
     newMeta.id = flush_counter_;
     newMeta.level = 1;
@@ -522,18 +541,19 @@ void StorageEngine::compactL0toL1() {
 
     levels_[0].clear();
 
-    // Remove merged L1 files from metadata
     std::sort(l1MetaIndices.rbegin(), l1MetaIndices.rend());
     for (size_t idx : l1MetaIndices) {
         levels_[1].erase(levels_[1].begin() + idx);
     }
 
-    // Add new L1 file and sort by minKey
     levels_[1].push_back(newMeta);
     std::sort(levels_[1].begin(), levels_[1].end(), [](const SSTableMeta &a, const SSTableMeta &b) { return a.minKey < b.minKey; });
 
-    // Save metadata
     saveMetadata();
+
+    if (cache_) {
+        cache_->clear();
+    }
 
     std::cout << "Compaction complete. New L1 file: " << newMeta.id << "\n";
 }
@@ -544,14 +564,12 @@ void StorageEngine::compactlevelN(uint32_t level) {
 
     std::cout << "Compacting L" << level << " -> L" << (level + 1) << "\n";
 
-    // Pick one file from level N to compact
     if (levels_[level].empty())
         return;
 
     const SSTableMeta &srcMeta = levels_[level][0];
     size_t srcMetaIdx = 0;
 
-    // Find the SSTable in sstables_ vector
     size_t srcSSTIdx = SIZE_MAX;
     auto it = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &table) {
         return table.filename().find("_" + std::to_string(srcMeta.id) + ".") != std::string::npos;
@@ -566,19 +584,16 @@ void StorageEngine::compactlevelN(uint32_t level) {
         return;
     }
 
-    // Ensure level+1 exists
     if (levels_.size() <= level + 1) {
         levels_.resize(level + 2);
     }
 
-    // Find overlapping files in level N+1
     std::vector<size_t> nextLevelSSTIndices;
     std::vector<size_t> nextLevelMetaIndices;
 
     for (size_t i = 0; i < levels_[level + 1].size(); i++) {
         const auto &meta = levels_[level + 1][i];
 
-        // Check for overlap
         if (!(meta.maxKey < srcMeta.minKey || meta.minKey > srcMeta.maxKey)) {
 
             auto foundIt = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &table) {
@@ -586,25 +601,22 @@ void StorageEngine::compactlevelN(uint32_t level) {
             });
 
             if (foundIt != sstables_.end()) {
-                size_t j = std::distance(sstables_.begin(), it);
+                size_t j = std::distance(sstables_.begin(), foundIt);
                 nextLevelSSTIndices.push_back(j);
                 nextLevelMetaIndices.push_back(i);
             }
         }
     }
 
-    // Collect all indices to merge
     std::vector<size_t> allIndices = {srcSSTIdx};
     allIndices.insert(allIndices.end(), nextLevelSSTIndices.begin(), nextLevelSSTIndices.end());
 
-    // Create iterators for merge
     std::vector<SSTable::Iterator> iters;
     iters.reserve(allIndices.size());
 
     std::transform(allIndices.begin(), allIndices.end(), std::back_inserter(iters),
                    [&](size_t idx) { return SSTable::Iterator{sstables_[idx]}; });
 
-    // Priority queue for merging
     using HeapElement = std::tuple<std::string, uint64_t, EntryType, size_t>;
     auto cmp = [](const HeapElement &a, const HeapElement &b) {
         if (std::get<0>(a) != std::get<0>(b)) {
@@ -615,7 +627,6 @@ void StorageEngine::compactlevelN(uint32_t level) {
 
     std::priority_queue<HeapElement, std::vector<HeapElement>, decltype(cmp)> pq(cmp);
 
-    // Initialize priority queue
     for (size_t i = 0; i < iters.size(); i++) {
         if (iters[i].valid()) {
             const auto &e = iters[i].entry();
@@ -623,7 +634,6 @@ void StorageEngine::compactlevelN(uint32_t level) {
         }
     }
 
-    // Merge entries
     std::map<std::string, Entry> merged_data;
 
     while (!pq.empty()) {
@@ -648,7 +658,6 @@ void StorageEngine::compactlevelN(uint32_t level) {
             }
         }
 
-        // Only keep PUT entries
         if (highestType == EntryType::PUT) {
             merged_data[key] = Entry{highestValue, highestSeq, highestType};
         }
@@ -662,27 +671,23 @@ void StorageEngine::compactlevelN(uint32_t level) {
         }
     }
 
-    // Delete old SSTable files
     std::filesystem::remove("data/sstables/sstable_" + std::to_string(srcMeta.id) + ".bin");
 
     for (size_t idx : nextLevelMetaIndices) {
         std::filesystem::remove("data/sstables/sstable_" + std::to_string(levels_[level + 1][idx].id) + ".bin");
     }
 
-    // Remove from sstables_ vector
     std::sort(allIndices.rbegin(), allIndices.rend());
     for (size_t idx : allIndices) {
         sstables_.erase(sstables_.begin() + idx);
     }
 
-    // Write new SSTable(s) to level N+1
     const std::string dir_path = "data/sstables/";
     flush_counter_++;
 
     SSTable newSSTable = SSTable::flush(merged_data, dir_path, flush_counter_);
     sstables_.push_back(std::move(newSSTable));
 
-    // Create new metadata
     SSTableMeta newMeta;
     newMeta.id = flush_counter_;
     newMeta.level = level + 1;
@@ -691,22 +696,23 @@ void StorageEngine::compactlevelN(uint32_t level) {
     newMeta.maxSeq = seq_number_ - 1;
     newMeta.sizeBytes = std::filesystem::file_size(dir_path + "sstable_" + std::to_string(flush_counter_) + ".bin");
 
-    // Remove source file from level N
     levels_[level].erase(levels_[level].begin() + srcMetaIdx);
 
-    // Remove merged files from level N+1
     std::sort(nextLevelMetaIndices.rbegin(), nextLevelMetaIndices.rend());
     for (size_t idx : nextLevelMetaIndices) {
         levels_[level + 1].erase(levels_[level + 1].begin() + idx);
     }
 
-    // Add new file to level N+1 and sort
     levels_[level + 1].push_back(newMeta);
     std::sort(levels_[level + 1].begin(), levels_[level + 1].end(),
               [](const SSTableMeta &a, const SSTableMeta &b) { return a.minKey < b.minKey; });
 
-    // Save metadata
     saveMetadata();
+
+    // Clear cache on compaction
+    if (cache_) {
+        cache_->clear();
+    }
 
     std::cout << "Compaction complete. New L" << (level + 1) << " file: " << newMeta.id << "\n";
 }
