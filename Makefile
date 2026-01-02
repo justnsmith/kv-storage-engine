@@ -18,6 +18,7 @@ SRC_FILES := \
 	$(SRC_DIR)/wal.cpp \
 	$(SRC_DIR)/test_framework.cpp \
 	$(SRC_DIR)/bloom_filter.cpp \
+	$(SRC_DIR)/lru_cache.cpp \
 
 SRC_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRC_FILES))
 
