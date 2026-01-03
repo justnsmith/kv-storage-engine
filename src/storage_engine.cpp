@@ -1,10 +1,14 @@
 #include "storage_engine.h"
 
-StorageEngine::StorageEngine(const std::string &wal_path, size_t cache_size)
-    : wal_(wal_path), memtable_(), seq_number_(1) {
+StorageEngine::StorageEngine(const std::string &wal_path, size_t cache_size) : wal_(wal_path), memtable_(), seq_number_(1) {
 
     if (cache_size > 0) {
         cache_ = LRUCache(cache_size);
+    }
+
+    try {
+        std::filesystem::create_directories("data/sstables");
+    } catch (const std::filesystem::filesystem_error &e) {
     }
 
     std::ifstream metadataFile("data/metadata.txt");
@@ -164,8 +168,10 @@ bool StorageEngine::get(const std::string &key, Entry &out) const {
 
                 if (sstIt != sstables_.end()) {
                     std::optional<Entry> record = sstIt->get(key);
-                    if (record) {
+                    if (record && (!candidate || record->seq > candidate->seq)) {
                         candidate = *record;
+                    }
+                    if (record) {
                         break;
                     }
                 }
@@ -320,12 +326,13 @@ void StorageEngine::checkFlush(bool debug) {
             cache_->clear();
         }
 
-        // Schedule background compaction
         scheduleCompaction();
     }
 }
 
 void StorageEngine::clearData() {
+    waitForCompaction();
+
     std::filesystem::path dataPath = "data";
     std::filesystem::create_directories(dataPath);
 
@@ -351,9 +358,12 @@ void StorageEngine::clearData() {
     if (cache_) {
         cache_->clear();
     }
-}
 
-// Background compaction methods
+    try {
+        std::filesystem::create_directories("data/sstables");
+    } catch (const std::filesystem::filesystem_error &e) {
+    }
+}
 
 void StorageEngine::scheduleCompaction() {
     compaction_needed_.store(true, std::memory_order_release);
@@ -362,13 +372,10 @@ void StorageEngine::scheduleCompaction() {
 
 void StorageEngine::compactionThreadLoop() {
     while (true) {
-        // Wait for compaction signal or shutdown
         {
             std::unique_lock<std::mutex> lock(compaction_mutex_);
-            compaction_cv_.wait(lock, [this] {
-                return shutdown_.load(std::memory_order_acquire) ||
-                       compaction_needed_.load(std::memory_order_acquire);
-            });
+            compaction_cv_.wait(
+                lock, [this] { return shutdown_.load(std::memory_order_acquire) || compaction_needed_.load(std::memory_order_acquire); });
         }
 
         if (shutdown_.load(std::memory_order_acquire)) {
@@ -421,12 +428,7 @@ bool StorageEngine::shouldCompactUnlocked(uint32_t level) const {
         return levels_[0].size() >= 4;
     }
 
-    static const std::vector<uint64_t> klevelSizes = {
-        0,
-        10 * 1024 * 1024,
-        100 * 1024 * 1024,
-        1024 * 1024 * 1024
-    };
+    static const std::vector<uint64_t> klevelSizes = {0, 10 * 1024 * 1024, 100 * 1024 * 1024, 1024 * 1024 * 1024};
 
     if (level >= klevelSizes.size()) {
         return false;
@@ -468,10 +470,13 @@ void StorageEngine::saveMetadata() {
 void StorageEngine::compactL0toL1() {
     std::lock_guard<std::mutex> lock(state_mutex_);
 
-    std::cout << "Compacting L0 -> L1 (background)\n";
+    std::cout << "DEBUG: Starting compaction L0 -> L1\n";
+    std::cout << "DEBUG: L0 has " << levels_[0].size() << " files\n";
 
     if (levels_[0].empty())
         return;
+
+    const std::string dir_path = "data/sstables/";
 
     std::string minKey = levels_[0][0].minKey;
     std::string maxKey = levels_[0][0].maxKey;
@@ -596,8 +601,9 @@ void StorageEngine::compactL0toL1() {
         sstables_.erase(sstables_.begin() + idx);
     }
 
-    const std::string dir_path = "data/sstables/";
     flush_counter_++;
+
+    std::cout << "DEBUG: Creating new SSTable " << flush_counter_ << " in L1\n";
 
     SSTable newSSTable = SSTable::flush(merged_data, dir_path, flush_counter_);
     sstables_.push_back(std::move(newSSTable));
@@ -639,6 +645,8 @@ void StorageEngine::compactlevelN(uint32_t level) {
 
     if (levels_[level].empty())
         return;
+
+    const std::string dir_path = "data/sstables/";
 
     const SSTableMeta &srcMeta = levels_[level][0];
     size_t srcMetaIdx = 0;
@@ -755,7 +763,6 @@ void StorageEngine::compactlevelN(uint32_t level) {
         sstables_.erase(sstables_.begin() + idx);
     }
 
-    const std::string dir_path = "data/sstables/";
     flush_counter_++;
 
     SSTable newSSTable = SSTable::flush(merged_data, dir_path, flush_counter_);
@@ -790,13 +797,14 @@ void StorageEngine::compactlevelN(uint32_t level) {
 }
 
 void StorageEngine::waitForCompaction() {
-    // Small delay to ensure compaction thread has started if it was just scheduled
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    // Small delay to make sure that compaction thread has started if it was just scheduled
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
     // Wait until no compaction is in progress
     std::unique_lock<std::mutex> lock(compaction_mutex_);
-    compaction_cv_.wait(lock, [this] {
-        return !compaction_in_progress_.load(std::memory_order_acquire) &&
-               !compaction_needed_.load(std::memory_order_acquire);
+    compaction_cv_.wait_for(lock, std::chrono::seconds(5), [this] {
+        return !compaction_in_progress_.load(std::memory_order_acquire) && !compaction_needed_.load(std::memory_order_acquire);
     });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
