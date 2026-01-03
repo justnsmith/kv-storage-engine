@@ -134,8 +134,7 @@ bool StorageEngine::get(const std::string &key, Entry &out) const {
         candidate = mem;
     }
 
-    // Lock for reading sstables_ and levels_
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::shared_lock<std::shared_mutex> lock(state_mutex_);
 
     // Search through the levels
     for (uint32_t level = 0; level < levels_.size(); level++) {
@@ -204,7 +203,7 @@ void StorageEngine::ls() const {
         std::cout << '\n';
     }
 
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::shared_lock<std::shared_mutex> lock(state_mutex_);
 
     for (size_t i = sstables_.size(); i-- > 0;) {
         const std::string path = sstables_[i].filename();
@@ -296,8 +295,7 @@ void StorageEngine::checkFlush(bool debug) {
         std::map<std::string, Entry> currentMemTable = memtable_.snapshot();
         const std::string dir_path = "data/sstables/";
 
-        // Lock for modifying sstables_ and levels_
-        std::lock_guard<std::mutex> lock(state_mutex_);
+        std::unique_lock<std::shared_mutex> lock(state_mutex_);
 
         flush_counter_++;
 
@@ -346,7 +344,7 @@ void StorageEngine::clearData() {
         std::cerr << "Filesystem error: " << e.what() << std::endl;
     }
 
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::unique_lock<std::shared_mutex> lock(state_mutex_);
 
     memtable_.clear();
     sstables_.clear();
@@ -405,7 +403,7 @@ void StorageEngine::maybeCompactBackground() {
         bool needs_compaction = false;
 
         {
-            std::lock_guard<std::mutex> lock(state_mutex_);
+            std::shared_lock<std::shared_mutex> lock(state_mutex_);
             needs_compaction = shouldCompactUnlocked(level);
         }
 
@@ -468,7 +466,7 @@ void StorageEngine::saveMetadata() {
 }
 
 void StorageEngine::compactL0toL1() {
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::unique_lock<std::shared_mutex> lock(state_mutex_);
 
     std::cout << "DEBUG: Starting compaction L0 -> L1\n";
     std::cout << "DEBUG: L0 has " << levels_[0].size() << " files\n";
@@ -636,7 +634,7 @@ void StorageEngine::compactL0toL1() {
 }
 
 void StorageEngine::compactlevelN(uint32_t level) {
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::unique_lock<std::shared_mutex> lock(state_mutex_);
 
     if (level == 0 || level >= levels_.size() - 1)
         return;
