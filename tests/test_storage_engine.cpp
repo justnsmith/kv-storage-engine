@@ -8,19 +8,26 @@
 
 class StorageEngineTest {
   public:
-    StorageEngineTest() : engine_("data/log.bin") {
+    StorageEngineTest() : engine_(nullptr) {
     }
 
     void setUp() {
-        engine_.clearData();
+        engine_.reset();
+
+        try {
+            std::filesystem::remove_all("data");
+        } catch (...) {
+        }
+
+        engine_ = std::make_unique<StorageEngine>("data/log.bin");
     }
 
     StorageEngine &getEngine() {
-        return engine_;
+        return *engine_;
     }
 
   private:
-    StorageEngine engine_;
+    std::unique_ptr<StorageEngine> engine_;
 };
 
 // Basic operations tests
@@ -259,6 +266,8 @@ bool test_compaction_removes_tombstones(StorageEngineTest &fixture) {
 
     engine.put("key3", "value3");
     engine.flush();
+
+    engine.waitForCompaction();
 
     Entry result;
     ASSERT_TRUE(!engine.get("key1", result), "Deleted key should not exist");
