@@ -8,7 +8,16 @@ SSTable::SSTable(const std::string &path) : path_(path) {
 
 SSTable SSTable::flush(const std::map<std::string, Entry> &snapshot, const std::string &dir_path, uint64_t flush_counter) {
     std::string full_path = dir_path + "sstable_" + std::to_string(flush_counter) + ".bin";
-    std::filesystem::create_directories(dir_path);
+
+    // Thread-safe directory creation
+    try {
+        if (!std::filesystem::exists(dir_path)) {
+            std::filesystem::create_directories(dir_path);
+        }
+    } catch (const std::filesystem::filesystem_error &e) {
+        // Directory might have been created by another thread, ignore
+    }
+
     SSTable table(full_path);
 
     std::ofstream sstableFile(full_path, std::ios::out | std::ios::binary);
@@ -90,7 +99,7 @@ std::optional<Entry> SSTable::get(const std::string &key) const {
 
     std::ifstream file(path_, std::ios::binary);
     if (!file)
-        throw std::runtime_error("Failed to open SSTable");
+        throw std::runtime_error("Failed to open SSTable: " + path_);
 
     // Binary search index to find start position
     uint64_t search_start = 0;
@@ -230,7 +239,7 @@ const std::string &SSTable::filename() const {
 
 SSTable::Iterator::Iterator(const SSTable &table) : file_(table.path_, std::ios::binary), data_end_(table.metadata_offset_) {
     if (!file_) {
-        throw std::runtime_error("Failed to open the SSTable");
+        throw std::runtime_error("Failed to open the SSTable: " + table.path_);
     }
 
     file_.seekg(0);
