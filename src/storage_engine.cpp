@@ -15,17 +15,29 @@ StorageEngine::StorageEngine(const std::string &wal_path, size_t cache_size)
     } else {
         std::string line;
         std::getline(metadataFile, line);
-        uint64_t flush_counter = stoull(line);
-        flush_counter_ = flush_counter;
+        flush_counter_ = stoull(line);
 
         std::getline(metadataFile, line);
-        uint64_t seqNumber = stoull(line);
-        seq_number_ = seqNumber;
+        seq_number_ = stoull(line);
 
         loadLevelMetadata();
     }
 
     loadSSTables();
+
+    // Start background compaction thread
+    compaction_thread_ = std::thread(&StorageEngine::compactionThreadLoop, this);
+}
+
+StorageEngine::~StorageEngine() {
+    // Signal shutdown and wake up compaction thread
+    shutdown_.store(true, std::memory_order_release);
+    compaction_cv_.notify_one();
+
+    // Wait for thread to finish
+    if (compaction_thread_.joinable()) {
+        compaction_thread_.join();
+    }
 }
 
 void StorageEngine::loadLevelMetadata() {
@@ -118,6 +130,9 @@ bool StorageEngine::get(const std::string &key, Entry &out) const {
         candidate = mem;
     }
 
+    // Lock for reading sstables_ and levels_
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
     // Search through the levels
     for (uint32_t level = 0; level < levels_.size(); level++) {
         if (levels_[level].empty())
@@ -151,7 +166,7 @@ bool StorageEngine::get(const std::string &key, Entry &out) const {
                     std::optional<Entry> record = sstIt->get(key);
                     if (record) {
                         candidate = *record;
-                        break; // Found in the current level, dont need to check deeper
+                        break;
                     }
                 }
             }
@@ -182,6 +197,8 @@ void StorageEngine::ls() const {
         }
         std::cout << '\n';
     }
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
 
     for (size_t i = sstables_.size(); i-- > 0;) {
         const std::string path = sstables_[i].filename();
@@ -227,10 +244,8 @@ void StorageEngine::recover() {
                 std::cerr << "Error reading operation\n";
             }
         });
-        std::cout << "here" << std::endl;
         seq_number_ = maxSeqNumber + 1;
     }
-    std::cout << seq_number_ << " " << maxSeqNumber << std::endl;
 }
 
 void StorageEngine::handleCommand(const std::string &input) {
@@ -275,6 +290,9 @@ void StorageEngine::checkFlush(bool debug) {
         std::map<std::string, Entry> currentMemTable = memtable_.snapshot();
         const std::string dir_path = "data/sstables/";
 
+        // Lock for modifying sstables_ and levels_
+        std::lock_guard<std::mutex> lock(state_mutex_);
+
         flush_counter_++;
 
         SSTable newSSTable = SSTable::flush(currentMemTable, dir_path, flush_counter_);
@@ -298,12 +316,12 @@ void StorageEngine::checkFlush(bool debug) {
 
         memtable_.clear();
 
-        // Clear cache on flush since data moved to SSTable
         if (cache_) {
             cache_->clear();
         }
 
-        maybeCompact();
+        // Schedule background compaction
+        scheduleCompaction();
     }
 }
 
@@ -320,6 +338,9 @@ void StorageEngine::clearData() {
     } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "Filesystem error: " << e.what() << std::endl;
     }
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
     memtable_.clear();
     sstables_.clear();
     flush_counter_ = 0;
@@ -332,9 +353,56 @@ void StorageEngine::clearData() {
     }
 }
 
-void StorageEngine::maybeCompact() {
-    for (uint32_t level = 0; level < levels_.size() - 1; level++) {
-        if (shouldCompact(level)) {
+// Background compaction methods
+
+void StorageEngine::scheduleCompaction() {
+    compaction_needed_.store(true, std::memory_order_release);
+    compaction_cv_.notify_one();
+}
+
+void StorageEngine::compactionThreadLoop() {
+    while (true) {
+        // Wait for compaction signal or shutdown
+        {
+            std::unique_lock<std::mutex> lock(compaction_mutex_);
+            compaction_cv_.wait(lock, [this] {
+                return shutdown_.load(std::memory_order_acquire) ||
+                       compaction_needed_.load(std::memory_order_acquire);
+            });
+        }
+
+        if (shutdown_.load(std::memory_order_acquire)) {
+            break;
+        }
+
+        if (compaction_needed_.load(std::memory_order_acquire)) {
+            compaction_needed_.store(false, std::memory_order_release);
+            compaction_in_progress_.store(true, std::memory_order_release);
+
+            maybeCompactBackground();
+
+            compaction_in_progress_.store(false, std::memory_order_release);
+
+            // Notify anyone waiting for compaction to finish
+            {
+                std::lock_guard<std::mutex> lock(compaction_mutex_);
+            }
+            compaction_cv_.notify_all();
+        }
+    }
+}
+
+void StorageEngine::maybeCompactBackground() {
+    // Check each level and compact if needed
+    for (uint32_t level = 0; level < 3; level++) {
+        bool needs_compaction = false;
+
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            needs_compaction = shouldCompactUnlocked(level);
+        }
+
+        if (needs_compaction) {
             if (level == 0) {
                 compactL0toL1();
             } else {
@@ -344,7 +412,7 @@ void StorageEngine::maybeCompact() {
     }
 }
 
-bool StorageEngine::shouldCompact(uint32_t level) {
+bool StorageEngine::shouldCompactUnlocked(uint32_t level) const {
     if (level >= levels_.size() || levels_[level].empty()) {
         return false;
     }
@@ -371,6 +439,7 @@ bool StorageEngine::shouldCompact(uint32_t level) {
 }
 
 void StorageEngine::saveMetadata() {
+    // Called with state_mutex_ held
     std::ofstream metadataFile("data/metadata.txt");
     if (!metadataFile) {
         std::cerr << "Error: Could not open metadata.txt" << '\n';
@@ -383,7 +452,7 @@ void StorageEngine::saveMetadata() {
 
     std::ofstream levelFile("data/levels.txt");
     if (!levelFile) {
-        std::cerr << "Error cold not open levels.txt" << '\n';
+        std::cerr << "Error could not open levels.txt" << '\n';
         return;
     }
 
@@ -397,7 +466,9 @@ void StorageEngine::saveMetadata() {
 }
 
 void StorageEngine::compactL0toL1() {
-    std::cout << "Compacting L0 -> L1\n";
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    std::cout << "Compacting L0 -> L1 (background)\n";
 
     if (levels_[0].empty())
         return;
@@ -559,10 +630,12 @@ void StorageEngine::compactL0toL1() {
 }
 
 void StorageEngine::compactlevelN(uint32_t level) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
     if (level == 0 || level >= levels_.size() - 1)
         return;
 
-    std::cout << "Compacting L" << level << " -> L" << (level + 1) << "\n";
+    std::cout << "Compacting L" << level << " -> L" << (level + 1) << " (background)\n";
 
     if (levels_[level].empty())
         return;
@@ -709,10 +782,21 @@ void StorageEngine::compactlevelN(uint32_t level) {
 
     saveMetadata();
 
-    // Clear cache on compaction
     if (cache_) {
         cache_->clear();
     }
 
     std::cout << "Compaction complete. New L" << (level + 1) << " file: " << newMeta.id << "\n";
+}
+
+void StorageEngine::waitForCompaction() {
+    // Small delay to ensure compaction thread has started if it was just scheduled
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    // Wait until no compaction is in progress
+    std::unique_lock<std::mutex> lock(compaction_mutex_);
+    compaction_cv_.wait(lock, [this] {
+        return !compaction_in_progress_.load(std::memory_order_acquire) &&
+               !compaction_needed_.load(std::memory_order_acquire);
+    });
 }
