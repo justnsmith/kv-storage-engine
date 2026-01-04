@@ -5,6 +5,7 @@ LDFLAGS := -lz
 BUILD_DIR := build
 SRC_DIR := src
 TEST_DIR := tests
+BENCHMARK_DIR := benchmarks
 
 APP := main
 TEST_APP := tests_runner
@@ -29,6 +30,10 @@ APP_OBJ := $(BUILD_DIR)/main.o
 TEST_SRCS := $(wildcard $(TEST_DIR)/*.cpp)
 TEST_OBJS := $(patsubst $(TEST_DIR)/%.cpp,$(BUILD_DIR)/%.test.o,$(TEST_SRCS))
 
+# Benchmark sources & objects
+BENCHMARK_SRCS := $(wildcard $(BENCHMARK_DIR)/*.cpp)
+BENCHMARK_BINS := $(patsubst $(BENCHMARK_DIR)/%.cpp,$(BUILD_DIR)/%,$(BENCHMARK_SRCS))
+
 # Default target
 all: $(BUILD_DIR) $(BUILD_DIR)/$(APP)
 
@@ -50,12 +55,43 @@ $(BUILD_DIR)/$(APP): $(SRC_OBJS) $(APP_OBJ)
 $(BUILD_DIR)/$(TEST_APP): $(SRC_OBJS) $(TEST_OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
+# Benchmark targets
+$(BUILD_DIR)/benchmark_%: $(BENCHMARK_DIR)/benchmark_%.cpp $(SRC_OBJS) | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
+benchmarks: $(BENCHMARK_BINS)
+
 # Commands
 run: $(BUILD_DIR)/$(APP)
 	./$(BUILD_DIR)/$(APP)
 
 test: $(BUILD_DIR)/$(TEST_APP)
 	./$(BUILD_DIR)/$(TEST_APP)
+
+# Run all benchmarks
+bench: benchmarks
+	@echo "Running all benchmarks..."
+	@echo ""
+	@./$(BUILD_DIR)/benchmark_write_throughput
+	@echo ""
+	@./$(BUILD_DIR)/benchmark_read_latency
+	@echo ""
+	@./$(BUILD_DIR)/benchmark_bloom_filter
+	@echo ""
+	@./$(BUILD_DIR)/benchmark_compaction
+
+# Run individual benchmarks
+bench-write: $(BUILD_DIR)/benchmark_write_throughput
+	./$(BUILD_DIR)/benchmark_write_throughput
+
+bench-read: $(BUILD_DIR)/benchmark_read_latency
+	./$(BUILD_DIR)/benchmark_read_latency
+
+bench-bloom: $(BUILD_DIR)/benchmark_bloom_filter
+	./$(BUILD_DIR)/benchmark_bloom_filter
+
+bench-compaction: $(BUILD_DIR)/benchmark_compaction
+	./$(BUILD_DIR)/benchmark_compaction
 
 check:
 	@command -v cppcheck >/dev/null 2>&1 || { echo "cppcheck not installed."; exit 1; }
@@ -69,4 +105,4 @@ check:
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all run test clean check
+.PHONY: all run test benchmarks bench bench-write bench-read bench-bloom bench-compaction clean check
