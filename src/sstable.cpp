@@ -1,7 +1,5 @@
 #include "sstable.h"
 
-// TODO: Hot keys cache implementation
-
 SSTable::SSTable(const std::string &path) : path_(path) {
     loadMetadata();
 }
@@ -9,13 +7,12 @@ SSTable::SSTable(const std::string &path) : path_(path) {
 SSTable SSTable::flush(const std::map<std::string, Entry> &snapshot, const std::string &dir_path, uint64_t flush_counter) {
     std::string full_path = dir_path + "sstable_" + std::to_string(flush_counter) + ".bin";
 
-    // Thread-safe directory creation
     try {
         if (!std::filesystem::exists(dir_path)) {
             std::filesystem::create_directories(dir_path);
         }
     } catch (const std::filesystem::filesystem_error &e) {
-        // Directory might have been created by another thread, ignore
+        throw std::runtime_error("Failed to create directory: " + dir_path + " Error: " + e.what());
     }
 
     SSTable table(full_path);
@@ -106,16 +103,13 @@ std::optional<Entry> SSTable::get(const std::string &key) const {
     uint64_t search_end = metadata_offset_;
 
     if (!index_.empty()) {
-        // Find largest index <= key
         auto it = std::upper_bound(index_.begin(), index_.end(), key,
                                    [](const std::string &k, const IndexEntry &entry) { return k < entry.key; });
-        // Go back one to get largest entry <= key
         if (it != index_.begin()) {
             --it;
             search_start = it->offset;
         }
 
-        // Set search_end to next index entry if it exists
         if (it != index_.end() && (it + 1) != index_.end()) {
             search_end = (it + 1)->offset;
         }
@@ -218,7 +212,6 @@ void SSTable::loadMetadata() {
         index_.push_back(IndexEntry{key, offset});
     }
 
-    // Read bloom filter
     uint32_t bloomSize;
     sstableFile.read(reinterpret_cast<char *>(&bloomSize), sizeof(bloomSize));
 
@@ -226,11 +219,6 @@ void SSTable::loadMetadata() {
     sstableFile.read(reinterpret_cast<char *>(bloom_data.data()), bloomSize);
 
     bloom_filter_ = std::make_unique<BloomFilter>(BloomFilter::deserialize(bloom_data));
-
-    std::cout << "MIN KEY: " << min_key_ << std::endl;
-    std::cout << "MAX KEY: " << max_key_ << std::endl;
-    std::cout << "INDEX SIZE: " << index_.size() << " entries" << std::endl;
-    std::cout << "BLOOM FILTER SIZE: " << bloom_filter_->size() << " bits" << std::endl;
 }
 
 const std::string &SSTable::filename() const {
