@@ -219,7 +219,6 @@ int main() {
     benchmarkCachedReads(NUM_KEYS, NUM_READS);
     benchmarkNonExistentKeys(NUM_KEYS, NUM_READS);
 
-    std::cout << "Benchmark complete!\n";
     std::filesystem::remove_all("data");
 
     return 0;

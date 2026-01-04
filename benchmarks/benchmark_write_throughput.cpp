@@ -132,7 +132,6 @@ int main() {
 
     benchmarkMixedWorkload(10000, 1024);
 
-    std::cout << "Benchmark complete!\n";
     std::filesystem::remove_all("data");
 
     return 0;

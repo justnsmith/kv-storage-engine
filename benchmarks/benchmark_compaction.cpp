@@ -309,14 +309,9 @@ int main() {
     benchmarkUpdateCompaction();
     benchmarkDeletionCompaction();
 
-    std::cout << "\n=== Summary ===\n";
     std::cout << "Compaction provides:\n";
     std::cout << "  • " << std::fixed << std::setprecision(1) << results.improvement_factor << "x faster reads by reducing SSTable count\n";
-    std::cout << "  • Reduced space amplification (eliminates duplicate/obsolete data)\n";
-    std::cout << "  • Tombstone removal (reclaims space from deletions)\n";
-    std::cout << "  • Better bloom filter efficiency (fewer SSTables to check)\n\n";
 
-    std::cout << "Benchmark complete!\n";
     std::filesystem::remove_all("data");
 
     return 0;

@@ -193,7 +193,6 @@ int main() {
     benchmarkWithAndWithoutBloomFilter();
     benchmarkBloomFilterMemoryEfficiency();
 
-    std::cout << "Benchmark complete!\n";
     std::filesystem::remove_all("data");
 
     return 0;
