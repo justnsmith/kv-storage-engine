@@ -791,10 +791,12 @@ void StorageEngine::waitForCompaction() {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 
+// cppcheck-suppress unusedFunction
 void StorageEngine::pauseCompaction() {
     compaction_paused_.store(true, std::memory_order_release);
 }
 
+// cppcheck-suppress unusedFunction
 void StorageEngine::resumeCompaction() {
     compaction_paused_.store(false, std::memory_order_release);
     scheduleCompaction();

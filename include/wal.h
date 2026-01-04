@@ -32,7 +32,7 @@ class WriteAheadLog {
     size_t buffer_size_ = 0;
     static constexpr size_t MAX_BUFFER_SIZE = 64 * 1024;
 
-    uint32_t calculateChecksum(Operation op, const std::string &key, const std::string &value, uint64_t seqNumber);
+    static uint32_t calculateChecksum(Operation op, const std::string &key, const std::string &value, uint64_t seqNumber);
     void flushBuffer();
 };
 

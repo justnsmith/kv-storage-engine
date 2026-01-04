@@ -100,6 +100,7 @@ check:
 		--suppress=checkersReport \
 		--suppress=functionConst \
 		--suppress=normalCheckLevelMaxBranches \
+		--inline-suppr \
 		-Iinclude $(SRC_DIR) $(TEST_DIR)
 
 clean:
