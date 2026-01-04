@@ -47,6 +47,8 @@ class StorageEngine {
     void clearData();
 
     void waitForCompaction();
+    void pauseCompaction();
+    void resumeCompaction();
 
   private:
     // Core storage components
@@ -66,6 +68,7 @@ class StorageEngine {
     std::mutex compaction_mutex_;
     std::atomic<bool> compaction_needed_{false};
     std::atomic<bool> compaction_in_progress_{false};
+    std::atomic<bool> compaction_paused_{false};
 
     // Core methods
     void checkFlush(bool debug = false);
