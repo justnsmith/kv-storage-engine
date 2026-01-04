@@ -2,29 +2,38 @@
 #define WAL_H
 
 #include "types.h"
-#include <cerrno>
-#include <cstdint>
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
-#include <optional>
-#include <sstream>
+#include <memory>
 #include <string>
-#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
 #include <zlib.h>
 
 class WriteAheadLog {
   public:
     explicit WriteAheadLog(const std::string &path);
+    ~WriteAheadLog();
+
     void append(Operation op, const std::string &key, const std::string &value, uint64_t seqNumber);
     void replay(std::function<void(uint64_t, Operation, std::string &, std::string &)> apply);
     bool empty() const;
 
+    void flush();
+
   private:
-    const std::string path_;
-    static uint32_t calculateChecksum(Operation op, const std::string &key, const std::string &value, const uint64_t seqNumber);
+    std::string path_;
+    std::ofstream log_file_;
+    std::vector<char> buffer_;
+    size_t buffer_size_ = 0;
+    static constexpr size_t MAX_BUFFER_SIZE = 64 * 1024;
+
+    uint32_t calculateChecksum(Operation op, const std::string &key, const std::string &value, uint64_t seqNumber);
+    void flushBuffer();
 };
+
 #endif
