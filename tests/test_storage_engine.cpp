@@ -12,14 +12,18 @@ class StorageEngineTest {
     }
 
     void setUp() {
+        tearDown();
+
+        engine_ = std::make_unique<StorageEngine>("data/log.bin");
+    }
+
+    void tearDown() {
         engine_.reset();
 
         try {
             std::filesystem::remove_all("data");
         } catch (...) {
         }
-
-        engine_ = std::make_unique<StorageEngine>("data/log.bin");
     }
 
     StorageEngine &getEngine() {
@@ -150,9 +154,9 @@ bool test_multiple_sstables_newest_wins(StorageEngineTest &fixture) {
 }
 
 // WAL recovery tests
-bool test_recovery_from_wal() {
+bool test_recovery_from_wal(StorageEngineTest &fixture) {
+    fixture.tearDown();
     const std::string walPath = "data/log.bin";
-    std::filesystem::remove_all("data");
 
     {
         StorageEngine engine(walPath);
@@ -174,9 +178,9 @@ bool test_recovery_from_wal() {
     return true;
 }
 
-bool test_recovery_with_updates() {
+bool test_recovery_with_updates(StorageEngineTest &fixture) {
+    fixture.tearDown();
     const std::string walPath = "data/log.bin";
-    std::filesystem::remove_all("data");
 
     {
         StorageEngine engine(walPath);
@@ -423,9 +427,9 @@ bool test_large_value(StorageEngineTest &fixture) {
 }
 
 // Persistence tests
-bool test_persistence_across_restarts() {
+bool test_persistence_across_restarts(StorageEngineTest &fixture) {
+    fixture.tearDown();
     const std::string walPath = "data/log.bin";
-    std::filesystem::remove_all("data");
 
     {
         StorageEngine engine(walPath);
@@ -458,8 +462,8 @@ void run_storage_engine_tests(TestFramework &framework) {
     framework.run("test_delete_then_put_sequence", [&]() { return test_delete_then_put_sequence(fixture); });
     framework.run("test_multiple_sstables_newest_wins", [&]() { return test_multiple_sstables_newest_wins(fixture); });
 
-    framework.run("test_recovery_from_wal", [&]() { return test_recovery_from_wal(); });
-    framework.run("test_recovery_with_updates", [&]() { return test_recovery_with_updates(); });
+    framework.run("test_recovery_from_wal", [&]() { return test_recovery_from_wal(fixture); });
+    framework.run("test_recovery_with_updates", [&]() { return test_recovery_with_updates(fixture); });
 
     framework.run("test_flush_creates_sstable", [&]() { return test_flush_creates_sstable(fixture); });
     framework.run("test_read_from_sstable_after_flush", [&]() { return test_read_from_sstable_after_flush(fixture); });
@@ -479,7 +483,7 @@ void run_storage_engine_tests(TestFramework &framework) {
     framework.run("test_empty_value", [&]() { return test_empty_value(fixture); });
     framework.run("test_large_value", [&]() { return test_large_value(fixture); });
 
-    framework.run("test_persistence_across_restarts", [&]() { return test_persistence_across_restarts(); });
+    framework.run("test_persistence_across_restarts", [&]() { return test_persistence_across_restarts(fixture); });
 
     std::cout << "========================================" << std::endl;
 }

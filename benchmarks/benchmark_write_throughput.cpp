@@ -1,8 +1,10 @@
 #include "storage_engine.h"
 #include <chrono>
+#include <future>
+#include <iomanip>
 #include <iostream>
 #include <random>
-#include <iomanip>
+#include <vector>
 
 std::string generateRandomString(size_t length) {
     static const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -22,12 +24,37 @@ void benchmarkSequentialWrites(size_t num_ops, size_t value_size) {
     std::filesystem::remove_all("data");
     StorageEngine engine("data/log.bin", 0);
 
+    // Pre-generate all keys and values
+    std::vector<std::string> keys, values;
+    keys.reserve(num_ops);
+    values.reserve(num_ops);
+    for (size_t i = 0; i < num_ops; ++i) {
+        keys.push_back("key_" + std::to_string(i));
+        values.push_back(generateRandomString(value_size));
+    }
+
     auto start = std::chrono::high_resolution_clock::now();
 
+    // Use async API with batched futures
+    constexpr size_t BATCH_SIZE = 1000;
+    std::vector<std::future<bool>> futures;
+    futures.reserve(BATCH_SIZE);
+
     for (size_t i = 0; i < num_ops; ++i) {
-        std::string key = "key_" + std::to_string(i);
-        std::string value = generateRandomString(value_size);
-        engine.put(key, value);
+        futures.push_back(engine.putAsync(keys[i], values[i]));
+
+        // Wait for batch completion periodically to avoid unbounded memory
+        if (futures.size() >= BATCH_SIZE) {
+            for (auto &f : futures) {
+                f.get();
+            }
+            futures.clear();
+        }
+    }
+
+    // Wait for remaining futures
+    for (auto &f : futures) {
+        f.get();
     }
 
     auto end = std::chrono::high_resolution_clock::now();
@@ -51,12 +78,35 @@ void benchmarkRandomWrites(size_t num_ops, size_t value_size) {
     std::mt19937 gen(rd());
     std::uniform_int_distribution<> dis(0, num_ops * 10);
 
+    // Pre-generate all keys and values
+    std::vector<std::string> keys, values;
+    keys.reserve(num_ops);
+    values.reserve(num_ops);
+    for (size_t i = 0; i < num_ops; ++i) {
+        keys.push_back("key_" + std::to_string(dis(gen)));
+        values.push_back(generateRandomString(value_size));
+    }
+
     auto start = std::chrono::high_resolution_clock::now();
 
+    // Use async API with batched futures
+    constexpr size_t BATCH_SIZE = 1000;
+    std::vector<std::future<bool>> futures;
+    futures.reserve(BATCH_SIZE);
+
     for (size_t i = 0; i < num_ops; ++i) {
-        std::string key = "key_" + std::to_string(dis(gen));
-        std::string value = generateRandomString(value_size);
-        engine.put(key, value);
+        futures.push_back(engine.putAsync(keys[i], values[i]));
+
+        if (futures.size() >= BATCH_SIZE) {
+            for (auto &f : futures) {
+                f.get();
+            }
+            futures.clear();
+        }
+    }
+
+    for (auto &f : futures) {
+        f.get();
     }
 
     auto end = std::chrono::high_resolution_clock::now();
@@ -123,14 +173,14 @@ void benchmarkMixedWorkload(size_t num_ops, size_t value_size) {
 int main() {
     std::cout << "=== KV Storage Engine - Write Throughput Benchmarks ===\n\n";
 
-    benchmarkSequentialWrites(10000, 100);   // 100B values
-    benchmarkSequentialWrites(10000, 1024);  // 1KB values
-    benchmarkSequentialWrites(5000, 4096);   // 4KB values
+    benchmarkSequentialWrites(1000000, 100);  // 100B values
+    benchmarkSequentialWrites(1000000, 1024); // 1KB values
+    benchmarkSequentialWrites(1000000, 4096); // 4KB values
 
-    benchmarkRandomWrites(10000, 100);
-    benchmarkRandomWrites(10000, 1024);
+    benchmarkRandomWrites(1000000, 100);
+    benchmarkRandomWrites(1000000, 1024);
 
-    benchmarkMixedWorkload(10000, 1024);
+    benchmarkMixedWorkload(1000000, 1024);
 
     std::filesystem::remove_all("data");
 
