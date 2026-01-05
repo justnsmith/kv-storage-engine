@@ -9,6 +9,7 @@
 #include <optional>
 #include <queue>
 #include <string>
+#include <vector>
 
 struct WriteRequest {
     Operation op;
@@ -31,7 +32,11 @@ class WriteQueue {
     ~WriteQueue();
 
     std::future<bool> push(Operation op, const std::string &key, const std::string &value);
+
     std::optional<std::unique_ptr<WriteRequest>> pop();
+
+    std::vector<std::unique_ptr<WriteRequest>> popBatch(size_t max_batch_size = 1000);
+
     void shutdown();
     bool isShutdown() const;
     size_t size() const;

@@ -45,6 +45,39 @@ std::optional<std::unique_ptr<WriteRequest>> WriteQueue::pop() {
     return request;
 }
 
+std::vector<std::unique_ptr<WriteRequest>> WriteQueue::popBatch(size_t max_batch_size) {
+    std::vector<std::unique_ptr<WriteRequest>> batch;
+
+    std::unique_lock<std::mutex> lock(mutex_);
+
+    not_empty_cv_.wait(lock, [this] { return !queue_.empty() || shutdown_; });
+
+    if (queue_.empty()) {
+        return batch;
+    }
+
+    if (queue_.size() < max_batch_size / 10) {
+        lock.unlock();
+        std::this_thread::yield();
+        lock.lock();
+    }
+
+    batch.reserve(std::min(queue_.size(), max_batch_size));
+
+    while (!queue_.empty() && batch.size() < max_batch_size) {
+        batch.push_back(std::move(queue_.front()));
+        queue_.pop();
+    }
+
+    if (batch.size() > 1) {
+        not_full_cv_.notify_all();
+    } else {
+        not_full_cv_.notify_one();
+    }
+
+    return batch;
+}
+
 void WriteQueue::shutdown() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -54,6 +87,7 @@ void WriteQueue::shutdown() {
     not_full_cv_.notify_all();
 }
 
+// cppcheck-suppress unusedFunction
 bool WriteQueue::isShutdown() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return shutdown_;
