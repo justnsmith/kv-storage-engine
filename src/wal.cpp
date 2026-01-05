@@ -70,11 +70,7 @@ void WriteAheadLog::doSync() {
             std::cerr << "WAL write failed: " << strerror(errno) << std::endl;
         }
 
-#ifdef __APPLE__
-        fcntl(fd_, F_FULLFSYNC);
-#else
-        fdatasync(fd_);
-#endif
+        fsync(fd_);
         sync_buffer_.clear();
     }
 
@@ -140,16 +136,22 @@ void WriteAheadLog::append(Operation op, const std::string &key, const std::stri
 
 void WriteAheadLog::flush() {
     sync_generation_.fetch_add(1);
+    uint64_t my_gen = sync_generation_.load();
     {
         std::lock_guard<std::mutex> lock(sync_mutex_);
         sync_requested_ = true;
     }
     sync_cv_.notify_one();
+
+    std::unique_lock<std::mutex> lock(buffer_mutex_);
+    sync_done_cv_.wait(lock, [this, my_gen] { return synced_generation_.load() >= my_gen; });
 }
 
 // cppcheck-suppress unusedFunction
 void WriteAheadLog::syncFlush() {
-    uint64_t my_gen = sync_generation_.fetch_add(1) + 1;
+    sync_generation_.fetch_add(1);
+    uint64_t my_gen = sync_generation_.load();
+
     {
         std::lock_guard<std::mutex> lock(sync_mutex_);
         sync_requested_ = true;
