@@ -13,9 +13,8 @@ inline constexpr const char *GREEN = "\033[32m";
 inline constexpr const char *RED = "\033[31m";
 inline constexpr const char *YELLOW = "\033[33m";
 inline constexpr const char *CYAN = "\033[36m";
-} // namespace Color
+}
 
-// Assertion helper with better error messages
 #define ASSERT_TRUE(cond, msg)                                                                                                             \
     do {                                                                                                                                   \
         if (!(cond)) {                                                                                                                     \

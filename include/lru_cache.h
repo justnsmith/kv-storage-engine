@@ -3,6 +3,7 @@
 
 #include "types.h"
 #include <list>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -22,6 +23,7 @@ class LRUCache {
         std::list<std::string>::iterator list_iter;
     };
 
+    mutable std::mutex mutex_;
     size_t capacity_;
     std::list<std::string> lru_list_;
     std::unordered_map<std::string, CacheNode> cache_;

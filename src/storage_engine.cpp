@@ -2,7 +2,7 @@
 
 StorageEngine::StorageEngine(const std::string &wal_path, size_t cache_size) : wal_(wal_path), memtable_(), seq_number_(1) {
     if (cache_size > 0) {
-        cache_ = LRUCache(cache_size);
+        cache_.emplace(cache_size);
     }
 
     try {
@@ -15,7 +15,9 @@ StorageEngine::StorageEngine(const std::string &wal_path, size_t cache_size) : w
 
     if (!metadataFile) {
         flush_counter_ = 0;
-        levels_.resize(4);
+        auto initialVersion = std::make_shared<TableVersion>();
+        initialVersion->levels.resize(4);
+        version_manager_.installVersion(initialVersion);
     } else {
         std::string line;
         std::getline(metadataFile, line);
@@ -25,33 +27,52 @@ StorageEngine::StorageEngine(const std::string &wal_path, size_t cache_size) : w
         seq_number_ = stoull(line);
 
         loadLevelMetadata();
+        loadSSTables();
     }
 
-    loadSSTables();
-
-    // Start background compaction thread
+    flush_thread_ = std::thread(&StorageEngine::flushThreadLoop, this);
+    writer_thread_ = std::thread(&StorageEngine::writerThreadLoop, this);
     compaction_thread_ = std::thread(&StorageEngine::compactionThreadLoop, this);
 }
 
 StorageEngine::~StorageEngine() {
-    // Signal shutdown and wake up compaction thread
-    shutdown_.store(true, std::memory_order_release);
+    writer_shutdown_.store(true, std::memory_order_release);
+    write_queue_.shutdown();
+
+    if (writer_thread_.joinable()) {
+        writer_thread_.join();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(flush_mutex_);
+        shutdown_.store(true, std::memory_order_release);
+    }
+    flush_cv_.notify_one();
+
+    if (flush_thread_.joinable()) {
+        flush_thread_.join();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(compaction_mutex_);
+    }
     compaction_cv_.notify_one();
 
-    // Wait for thread to finish
     if (compaction_thread_.joinable()) {
         compaction_thread_.join();
     }
 }
 
 void StorageEngine::loadLevelMetadata() {
+    auto newVersion = std::make_shared<TableVersion>();
+
     std::ifstream levelFile("data/levels.txt");
     if (!levelFile) {
-        levels_.resize(4);
+        newVersion->levels.resize(4);
+        version_manager_.installVersion(newVersion);
         return;
     }
 
-    levels_.clear();
     std::string line;
 
     while (std::getline(levelFile, line)) {
@@ -62,59 +83,61 @@ void StorageEngine::loadLevelMetadata() {
         SSTableMeta meta;
         iss >> meta.id >> meta.level >> meta.minKey >> meta.maxKey >> meta.maxSeq >> meta.sizeBytes;
 
-        if (meta.level >= levels_.size()) {
-            levels_.resize(meta.level + 1);
+        if (meta.level >= newVersion->levels.size()) {
+            newVersion->levels.resize(meta.level + 1);
         }
 
-        levels_[meta.level].push_back(meta);
+        newVersion->levels[meta.level].push_back(meta);
     }
+
+    if (newVersion->levels.empty()) {
+        newVersion->levels.resize(4);
+    }
+
+    newVersion->flush_counter = flush_counter_;
+    version_manager_.installVersion(newVersion);
 }
 
 void StorageEngine::loadSSTables() {
-    sstables_.clear();
+    auto newVersion = version_manager_.getVersionForModification();
 
-    for (const auto &levelMetas : levels_) {
+    for (const auto &levelMetas : newVersion->levels) {
         for (const auto &meta : levelMetas) {
             std::string path = "data/sstables/sstable_" + std::to_string(meta.id) + ".bin";
             if (std::filesystem::exists(path)) {
-                sstables_.emplace_back(path);
+                newVersion->sstables.push_back(std::make_shared<SSTable>(path));
             } else {
                 std::cerr << "Warning: SSTable file was not found: " << path << '\n';
             }
         }
     }
+
+    version_manager_.installVersion(newVersion);
 }
 
 bool StorageEngine::put(const std::string &key, const std::string &value) {
-    bool result = false;
-    if (memtable_.put(key, value, seq_number_)) {
-        wal_.append(Operation::PUT, key, value, seq_number_);
-        seq_number_++;
-        result = true;
+    std::future<bool> result = write_queue_.push(Operation::PUT, key, value);
+    return result.get();
+}
 
-        if (cache_) {
-            cache_->invalidate(key);
-        }
-    }
-    checkFlush();
-    return result;
+// cppcheck-suppress unusedFunction
+std::future<bool> StorageEngine::putAsync(const std::string &key, const std::string &value) {
+    return write_queue_.push(Operation::PUT, key, value);
 }
 
 bool StorageEngine::del(const std::string &key) {
     Entry existing;
     bool existed = get(key, existing);
 
-    memtable_.del(key, seq_number_);
-    wal_.append(Operation::DELETE, key, "", seq_number_);
-    seq_number_++;
-
-    if (cache_) {
-        cache_->invalidate(key);
-    }
-
-    checkFlush();
+    std::future<bool> result = write_queue_.push(Operation::DELETE, key, "");
+    result.get();
 
     return existed;
+}
+
+// cppcheck-suppress unusedFunction
+std::future<bool> StorageEngine::delAsync(const std::string &key) {
+    return write_queue_.push(Operation::DELETE, key, "");
 }
 
 bool StorageEngine::get(const std::string &key, Entry &out) const {
@@ -133,22 +156,29 @@ bool StorageEngine::get(const std::string &key, Entry &out) const {
         candidate = mem;
     }
 
-    std::shared_lock<std::shared_mutex> lock(state_mutex_);
+    auto immutable = std::atomic_load(&immutable_memtable_);
+    if (immutable) {
+        Entry immut_mem;
+        if (immutable->get(key, immut_mem)) {
+            if (!candidate || immut_mem.seq > candidate->seq) {
+                candidate = immut_mem;
+            }
+        }
+    }
 
-    // Search through the levels
-    for (uint32_t level = 0; level < levels_.size(); level++) {
-        if (levels_[level].empty())
+    auto version = version_manager_.getCurrentVersion();
+    const auto &levels = version->levels;
+
+    for (uint32_t level = 0; level < levels.size(); level++) {
+        if (levels[level].empty())
             continue;
 
         if (level == 0) {
             // L0: Have to check all the files since there are overlapping ranges
-            for (const auto &meta : levels_[0]) {
-                auto it = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &sst) {
-                    return sst.filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos;
-                });
-
-                if (it != sstables_.end()) {
-                    std::optional<Entry> record = it->get(key);
+            for (const auto &meta : levels[0]) {
+                auto sst = version->findSSTableById(meta.id);
+                if (sst) {
+                    std::optional<Entry> record = sst->get(key);
                     if (record && (!candidate || record->seq > candidate->seq)) {
                         candidate = *record;
                     }
@@ -156,16 +186,13 @@ bool StorageEngine::get(const std::string &key, Entry &out) const {
             }
         } else {
             // L1+: binary search to find correct file
-            auto it = std::lower_bound(levels_[level].begin(), levels_[level].end(), key,
+            auto it = std::lower_bound(levels[level].begin(), levels[level].end(), key,
                                        [](const SSTableMeta &meta, const std::string &k) { return meta.maxKey < k; });
 
-            if (it != levels_[level].end() && key >= it->minKey) {
-                auto sstIt = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &sst) {
-                    return sst.filename().find("_" + std::to_string(it->id) + ".") != std::string::npos;
-                });
-
-                if (sstIt != sstables_.end()) {
-                    std::optional<Entry> record = sstIt->get(key);
+            if (it != levels[level].end() && key >= it->minKey) {
+                auto sst = version->findSSTableById(it->id);
+                if (sst) {
+                    std::optional<Entry> record = sst->get(key);
                     if (record && (!candidate || record->seq > candidate->seq)) {
                         candidate = *record;
                     }
@@ -195,17 +222,33 @@ bool StorageEngine::get(const std::string &key, Entry &out) const {
 void StorageEngine::ls() const {
     const auto currentMemtable = memtable_.snapshot();
     if (!currentMemtable.empty()) {
-        std::cout << "Memtable:\n";
+        std::cout << "Memtable (active):\n";
         for (const auto &[k, v] : currentMemtable) {
             std::cout << k << " " << (v.type == EntryType::DELETE ? "<TOMBSTONE>" : v.value) << " " << v.seq << "\n";
         }
         std::cout << '\n';
     }
 
-    std::shared_lock<std::shared_mutex> lock(state_mutex_);
+    auto immutable = std::atomic_load(&immutable_memtable_);
+    if (immutable) {
+        const auto immutableSnapshot = immutable->snapshot();
+        if (!immutableSnapshot.empty()) {
+            std::cout << "Memtable (immutable, flushing):\n";
+            for (const auto &[k, v] : immutableSnapshot) {
+                std::cout << k << " " << (v.type == EntryType::DELETE ? "<TOMBSTONE>" : v.value) << " " << v.seq << "\n";
+            }
+            std::cout << '\n';
+        }
+    }
 
-    for (size_t i = sstables_.size(); i-- > 0;) {
-        const std::string path = sstables_[i].filename();
+    auto version = version_manager_.getCurrentVersion();
+
+    for (size_t i = version->sstables.size(); i-- > 0;) {
+        const auto &sst = version->sstables[i];
+        if (!sst)
+            continue;
+
+        const std::string path = sst->filename();
         if (!std::filesystem::exists(path)) {
             std::cerr << "Warning: SSTable file missing: " << path << ", skipping.\n";
             continue;
@@ -219,7 +262,7 @@ void StorageEngine::ls() const {
         std::string numberStr = path.substr(underscorePos + 1, dotPos - underscorePos - 1);
         std::cout << "SSTable " << numberStr << ":\n";
 
-        std::map<std::string, Entry> currSStableData = sstables_[i].getData();
+        std::map<std::string, Entry> currSStableData = sst->getData();
         for (const auto &[k, v] : currSStableData) {
             std::cout << k << " " << v.value << " " << v.seq << "\n";
         }
@@ -290,39 +333,99 @@ void StorageEngine::checkFlush(bool debug) {
     static constexpr size_t kMemTableThreshold = 8 * 1024 * 1024;
     if (memtable_.getSize() >= kMemTableThreshold || debug) {
         wal_.flush();
-        std::map<std::string, Entry> currentMemTable = memtable_.snapshot();
-        const std::string dir_path = "data/sstables/";
 
-        std::unique_lock<std::shared_mutex> lock(state_mutex_);
+        {
+            std::unique_lock<std::mutex> lock(flush_mutex_);
+            while (std::atomic_load(&immutable_memtable_) && !shutdown_.load(std::memory_order_acquire)) {
+                flush_cv_.wait(lock);
+            }
 
-        flush_counter_++;
+            if (shutdown_.load(std::memory_order_acquire)) {
+                return;
+            }
 
-        SSTable newSSTable = SSTable::flush(currentMemTable, dir_path, flush_counter_);
-        sstables_.push_back(std::move(newSSTable));
+            auto new_immutable = std::make_shared<MemTable>();
+            std::swap(memtable_, *new_immutable);
 
-        SSTableMeta meta;
-        meta.id = flush_counter_;
-        meta.level = 0;
-        meta.minKey = currentMemTable.begin()->first;
-        meta.maxKey = currentMemTable.rbegin()->first;
-        meta.maxSeq = seq_number_ - 1;
-        meta.sizeBytes = std::filesystem::file_size(dir_path + "sstable_" + std::to_string(flush_counter_) + ".bin");
+            std::atomic_store(&immutable_memtable_, new_immutable);
 
-        if (levels_.empty())
-            levels_.resize(4);
-
-        levels_[0].push_back(meta);
-
-        std::remove("data/log.bin");
-        saveMetadata();
-
-        memtable_.clear();
-
-        if (cache_) {
-            cache_->clear();
+            flush_pending_.store(true, std::memory_order_release);
         }
 
-        scheduleCompaction();
+        flush_cv_.notify_one();
+
+        std::remove("data/log.bin");
+    }
+}
+
+// cppcheck-suppress unusedFunction
+void StorageEngine::triggerFlush() {
+    checkFlush(true);
+}
+
+void StorageEngine::flushThreadLoop() {
+    while (true) {
+        std::shared_ptr<MemTable> memtable_to_flush;
+
+        {
+            std::unique_lock<std::mutex> lock(flush_mutex_);
+            flush_cv_.wait(lock,
+                           [this] { return shutdown_.load(std::memory_order_acquire) || flush_pending_.load(std::memory_order_acquire); });
+
+            auto current_immutable = std::atomic_load(&immutable_memtable_);
+            if (shutdown_.load(std::memory_order_acquire) && !current_immutable) {
+                break;
+            }
+
+            if (current_immutable) {
+                memtable_to_flush = current_immutable;
+                flush_pending_.store(false, std::memory_order_release);
+            }
+        }
+
+        if (memtable_to_flush) {
+            std::map<std::string, Entry> snapshot = memtable_to_flush->snapshot();
+
+            if (!snapshot.empty()) {
+                const std::string dir_path = "data/sstables/";
+                uint64_t new_flush_counter;
+                {
+                    std::lock_guard<std::mutex> lock(metadata_mutex_);
+                    flush_counter_++;
+                    new_flush_counter = flush_counter_;
+                }
+
+                auto newSSTable = std::make_shared<SSTable>(SSTable::flush(snapshot, dir_path, new_flush_counter));
+
+                SSTableMeta meta;
+                meta.id = new_flush_counter;
+                meta.level = 0;
+                meta.minKey = snapshot.begin()->first;
+                meta.maxKey = snapshot.rbegin()->first;
+                meta.maxSeq = seq_number_ - 1;
+                meta.sizeBytes = std::filesystem::file_size(dir_path + "sstable_" + std::to_string(new_flush_counter) + ".bin");
+
+                auto newVersion = version_manager_.getVersionForModification();
+                newVersion->addSSTable(std::move(newSSTable), meta);
+                newVersion->flush_counter = new_flush_counter;
+                version_manager_.installVersion(newVersion);
+
+                {
+                    std::lock_guard<std::mutex> lock(metadata_mutex_);
+                    saveMetadata();
+                }
+
+                if (cache_) {
+                    cache_->clear();
+                }
+
+                scheduleCompaction();
+            }
+
+            std::atomic_store(&immutable_memtable_, std::shared_ptr<MemTable>(nullptr));
+
+            flush_cv_.notify_all();
+        }
     }
 }
 
@@ -342,14 +445,16 @@ void StorageEngine::clearData() {
         std::cerr << "Filesystem error: " << e.what() << std::endl;
     }
 
-    std::unique_lock<std::shared_mutex> lock(state_mutex_);
-
     memtable_.clear();
-    sstables_.clear();
-    flush_counter_ = 0;
-    seq_number_ = 1;
-    levels_.clear();
-    levels_.resize(4);
+    {
+        std::lock_guard<std::mutex> lock(metadata_mutex_);
+        flush_counter_ = 0;
+        seq_number_ = 1;
+    }
+
+    auto freshVersion = std::make_shared<TableVersion>();
+    freshVersion->levels.resize(4);
+    version_manager_.installVersion(freshVersion);
 
     if (cache_) {
         cache_->clear();
@@ -364,6 +469,71 @@ void StorageEngine::clearData() {
 void StorageEngine::scheduleCompaction() {
     compaction_needed_.store(true, std::memory_order_release);
     compaction_cv_.notify_one();
+}
+
+void StorageEngine::writerThreadLoop() {
+    constexpr size_t MAX_BATCH_SIZE = 1000;
+
+    while (true) {
+        auto batch = write_queue_.popBatch(MAX_BATCH_SIZE);
+
+        if (batch.empty()) {
+            break;
+        }
+
+        std::vector<std::pair<WriteRequest *, bool>> results;
+        results.reserve(batch.size());
+
+        try {
+            for (auto &request : batch) {
+                bool success = false;
+
+                switch (request->op) {
+                case Operation::PUT:
+                    if (memtable_.put(request->key, request->value, seq_number_)) {
+                        wal_.append(Operation::PUT, request->key, request->value, seq_number_);
+                        seq_number_++;
+                        success = true;
+
+                        if (cache_) {
+                            cache_->invalidate(request->key);
+                        }
+                    }
+                    break;
+
+                case Operation::DELETE:
+                    memtable_.del(request->key, seq_number_);
+                    wal_.append(Operation::DELETE, request->key, "", seq_number_);
+                    seq_number_++;
+
+                    if (cache_) {
+                        cache_->invalidate(request->key);
+                    }
+                    success = true;
+                    break;
+
+                default:
+                    break;
+                }
+
+                results.emplace_back(request.get(), success);
+            }
+
+            wal_.flush();
+
+            checkFlush();
+
+        } catch (const std::exception &e) {
+            std::cerr << "Writer thread error: " << e.what() << std::endl;
+            for (auto &[req, success] : results) {
+                success = false;
+            }
+        }
+
+        for (auto &[req, success] : results) {
+            req->completion.set_value(success);
+        }
+    }
 }
 
 void StorageEngine::compactionThreadLoop() {
@@ -383,7 +553,6 @@ void StorageEngine::compactionThreadLoop() {
             compaction_in_progress_.store(true, std::memory_order_release);
             maybeCompactBackground();
             compaction_in_progress_.store(false, std::memory_order_release);
-            // Notify anyone waiting for compaction to finish
             {
                 std::lock_guard<std::mutex> lock(compaction_mutex_);
             }
@@ -393,14 +562,9 @@ void StorageEngine::compactionThreadLoop() {
 }
 
 void StorageEngine::maybeCompactBackground() {
-    // Check each level and compact if needed
     for (uint32_t level = 0; level < 3; level++) {
-        bool needs_compaction = false;
-
-        {
-            std::shared_lock<std::shared_mutex> lock(state_mutex_);
-            needs_compaction = shouldCompactUnlocked(level);
-        }
+        auto version = version_manager_.getCurrentVersion();
+        bool needs_compaction = shouldCompactUnlocked(level, version);
 
         if (needs_compaction) {
             if (level == 0) {
@@ -413,12 +577,17 @@ void StorageEngine::maybeCompactBackground() {
 }
 
 bool StorageEngine::shouldCompactUnlocked(uint32_t level) const {
-    if (level >= levels_.size() || levels_[level].empty()) {
+    auto version = version_manager_.getCurrentVersion();
+    return shouldCompactUnlocked(level, version);
+}
+
+bool StorageEngine::shouldCompactUnlocked(uint32_t level, const std::shared_ptr<TableVersion> &version) {
+    if (!version || level >= version->levels.size() || version->levels[level].empty()) {
         return false;
     }
 
     if (level == 0) {
-        return levels_[0].size() >= 4;
+        return version->levels[0].size() >= 4;
     }
 
     static const std::vector<uint64_t> klevelSizes = {0, 10 * 1024 * 1024, 100 * 1024 * 1024, 1024 * 1024 * 1024};
@@ -427,14 +596,15 @@ bool StorageEngine::shouldCompactUnlocked(uint32_t level) const {
         return false;
     }
 
-    uint64_t totalSize = std::accumulate(levels_[level].begin(), levels_[level].end(), uint64_t{0},
+    uint64_t totalSize = std::accumulate(version->levels[level].begin(), version->levels[level].end(), uint64_t{0},
                                          [](uint64_t sum, const SSTableMeta &meta) { return sum + meta.sizeBytes; });
 
     return totalSize > klevelSizes[level];
 }
 
 void StorageEngine::saveMetadata() {
-    // Called with state_mutex_ held
+    auto version = version_manager_.getCurrentVersion();
+
     std::ofstream metadataFile("data/metadata.txt");
     if (!metadataFile) {
         std::cerr << "Error: Could not open metadata.txt" << '\n';
@@ -451,8 +621,8 @@ void StorageEngine::saveMetadata() {
         return;
     }
 
-    for (uint32_t level = 0; level < levels_.size(); level++) {
-        for (const auto &meta : levels_[level]) {
+    for (uint32_t level = 0; level < version->levels.size(); level++) {
+        for (const auto &meta : version->levels[level]) {
             levelFile << meta.id << ' ' << meta.level << ' ' << meta.minKey << ' ' << meta.maxKey << ' ' << meta.maxSeq << ' '
                       << meta.sizeBytes << '\n';
         }
@@ -461,67 +631,54 @@ void StorageEngine::saveMetadata() {
 }
 
 void StorageEngine::compactL0toL1() {
-    std::unique_lock<std::shared_mutex> lock(state_mutex_);
+    auto oldVersion = version_manager_.getCurrentVersion();
 
-    if (levels_[0].empty())
+    if (oldVersion->levels.empty() || oldVersion->levels[0].empty())
         return;
 
     const std::string dir_path = "data/sstables/";
 
-    std::string minKey = levels_[0][0].minKey;
-    std::string maxKey = levels_[0][0].maxKey;
-    for (const auto &meta : levels_[0]) {
+    std::string minKey = oldVersion->levels[0][0].minKey;
+    std::string maxKey = oldVersion->levels[0][0].maxKey;
+    for (const auto &meta : oldVersion->levels[0]) {
         if (meta.minKey < minKey)
             minKey = meta.minKey;
         if (meta.maxKey > maxKey)
             maxKey = meta.maxKey;
     }
 
-    std::vector<size_t> l0Indices;
-    for (size_t i = 0; i < sstables_.size(); i++) {
-        const auto &fname = sstables_[i].filename();
-
-        bool isL0 = std::any_of(levels_[0].begin(), levels_[0].end(), [&](const SSTableMeta &meta) {
-            return fname.find("_" + std::to_string(meta.id) + ".") != std::string::npos;
-        });
-
-        if (isL0) {
-            l0Indices.push_back(i);
+    std::vector<std::shared_ptr<SSTable>> l0SSTables;
+    std::vector<uint64_t> l0Ids;
+    for (const auto &meta : oldVersion->levels[0]) {
+        auto sst = oldVersion->findSSTableById(meta.id);
+        if (sst) {
+            l0SSTables.push_back(sst);
+            l0Ids.push_back(meta.id);
         }
     }
 
-    std::vector<size_t> l1SSTIndices;
-    std::vector<size_t> l1MetaIndices;
-
-    if (levels_.size() > 1) {
-        for (size_t i = 0; i < levels_[1].size(); i++) {
-            const auto &meta = levels_[1][i];
-
+    std::vector<std::shared_ptr<SSTable>> l1SSTables;
+    std::vector<uint64_t> l1Ids;
+    if (oldVersion->levels.size() > 1) {
+        for (const auto &meta : oldVersion->levels[1]) {
             if (!(meta.maxKey < minKey || meta.minKey > maxKey)) {
-
-                auto it = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &table) {
-                    return table.filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos;
-                });
-
-                if (it != sstables_.end()) {
-                    size_t j = std::distance(sstables_.begin(), it);
-                    l1SSTIndices.push_back(j);
-                    l1MetaIndices.push_back(i);
+                auto sst = oldVersion->findSSTableById(meta.id);
+                if (sst) {
+                    l1SSTables.push_back(sst);
+                    l1Ids.push_back(meta.id);
                 }
             }
         }
-    } else {
-        levels_.resize(std::max(2UL, levels_.size()));
     }
 
-    std::vector<size_t> allIndices = l0Indices;
-    allIndices.insert(allIndices.end(), l1SSTIndices.begin(), l1SSTIndices.end());
+    std::vector<std::shared_ptr<SSTable>> allSSTables;
+    allSSTables.insert(allSSTables.end(), l0SSTables.begin(), l0SSTables.end());
+    allSSTables.insert(allSSTables.end(), l1SSTables.begin(), l1SSTables.end());
 
     std::vector<SSTable::Iterator> iters;
-    iters.reserve(allIndices.size());
-
-    std::transform(allIndices.begin(), allIndices.end(), std::back_inserter(iters),
-                   [&](size_t idx) { return SSTable::Iterator{sstables_[idx]}; });
+    iters.reserve(allSSTables.size());
+    std::transform(allSSTables.begin(), allSSTables.end(), std::back_inserter(iters),
+                   [](const std::shared_ptr<SSTable> &sst) { return SSTable::Iterator{*sst}; });
 
     using HeapElement = std::tuple<std::string, uint64_t, EntryType, size_t>;
     auto cmp = [](const HeapElement &a, const HeapElement &b) {
@@ -577,44 +734,51 @@ void StorageEngine::compactL0toL1() {
         }
     }
 
-    for (const auto &meta : levels_[0]) {
-        std::filesystem::remove("data/sstables/sstable_" + std::to_string(meta.id) + ".bin");
+    if (merged_data.empty())
+        return;
+
+    uint64_t new_flush_counter;
+    {
+        std::lock_guard<std::mutex> lock(metadata_mutex_);
+        flush_counter_++;
+        new_flush_counter = flush_counter_;
     }
 
-    for (size_t idx : l1MetaIndices) {
-        std::filesystem::remove("data/sstables/sstable_" + std::to_string(levels_[1][idx].id) + ".bin");
-    }
-
-    std::vector<size_t> allIndicesToRemove = allIndices;
-    std::sort(allIndicesToRemove.rbegin(), allIndicesToRemove.rend());
-    for (size_t idx : allIndicesToRemove) {
-        sstables_.erase(sstables_.begin() + idx);
-    }
-
-    flush_counter_++;
-
-    SSTable newSSTable = SSTable::flush(merged_data, dir_path, flush_counter_);
-    sstables_.push_back(std::move(newSSTable));
+    auto newSSTable = std::make_shared<SSTable>(SSTable::flush(merged_data, dir_path, new_flush_counter));
 
     SSTableMeta newMeta;
-    newMeta.id = flush_counter_;
+    newMeta.id = new_flush_counter;
     newMeta.level = 1;
     newMeta.minKey = merged_data.begin()->first;
     newMeta.maxKey = merged_data.rbegin()->first;
     newMeta.maxSeq = seq_number_ - 1;
-    newMeta.sizeBytes = std::filesystem::file_size(dir_path + "sstable_" + std::to_string(flush_counter_) + ".bin");
+    newMeta.sizeBytes = std::filesystem::file_size(dir_path + "sstable_" + std::to_string(new_flush_counter) + ".bin");
 
-    levels_[0].clear();
+    auto newVersion = version_manager_.getVersionForModification();
 
-    std::sort(l1MetaIndices.rbegin(), l1MetaIndices.rend());
-    for (size_t idx : l1MetaIndices) {
-        levels_[1].erase(levels_[1].begin() + idx);
+    std::vector<uint64_t> idsToRemove;
+    idsToRemove.insert(idsToRemove.end(), l0Ids.begin(), l0Ids.end());
+    idsToRemove.insert(idsToRemove.end(), l1Ids.begin(), l1Ids.end());
+    newVersion->removeSSTablesByIds(idsToRemove);
+
+    newVersion->addSSTable(std::move(newSSTable), newMeta);
+    newVersion->flush_counter = new_flush_counter;
+
+    if (newVersion->levels.size() > 1) {
+        std::sort(newVersion->levels[1].begin(), newVersion->levels[1].end(),
+                  [](const SSTableMeta &a, const SSTableMeta &b) { return a.minKey < b.minKey; });
     }
 
-    levels_[1].push_back(newMeta);
-    std::sort(levels_[1].begin(), levels_[1].end(), [](const SSTableMeta &a, const SSTableMeta &b) { return a.minKey < b.minKey; });
+    version_manager_.installVersion(newVersion);
 
-    saveMetadata();
+    {
+        std::lock_guard<std::mutex> lock(metadata_mutex_);
+        saveMetadata();
+    }
+
+    for (uint64_t id : idsToRemove) {
+        std::filesystem::remove("data/sstables/sstable_" + std::to_string(id) + ".bin");
+    }
 
     if (cache_) {
         cache_->clear();
@@ -622,65 +786,47 @@ void StorageEngine::compactL0toL1() {
 }
 
 void StorageEngine::compactlevelN(uint32_t level) {
-    std::unique_lock<std::shared_mutex> lock(state_mutex_);
+    auto oldVersion = version_manager_.getCurrentVersion();
 
-    if (level == 0 || level >= levels_.size() - 1)
+    if (level == 0 || level >= oldVersion->levels.size())
         return;
 
-    if (levels_[level].empty())
+    if (oldVersion->levels[level].empty())
         return;
 
     const std::string dir_path = "data/sstables/";
 
-    const SSTableMeta &srcMeta = levels_[level][0];
-    size_t srcMetaIdx = 0;
+    const SSTableMeta &srcMeta = oldVersion->levels[level][0];
+    auto srcSSTable = oldVersion->findSSTableById(srcMeta.id);
 
-    size_t srcSSTIdx = SIZE_MAX;
-    auto it = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &table) {
-        return table.filename().find("_" + std::to_string(srcMeta.id) + ".") != std::string::npos;
-    });
-
-    if (it != sstables_.end()) {
-        srcSSTIdx = std::distance(sstables_.begin(), it);
-    }
-
-    if (srcSSTIdx == SIZE_MAX) {
+    if (!srcSSTable) {
         std::cerr << "Error: Could not find SSTable for level " << level << "\n";
         return;
     }
 
-    if (levels_.size() <= level + 1) {
-        levels_.resize(level + 2);
-    }
+    std::vector<std::shared_ptr<SSTable>> nextLevelSSTables;
+    std::vector<uint64_t> nextLevelIds;
 
-    std::vector<size_t> nextLevelSSTIndices;
-    std::vector<size_t> nextLevelMetaIndices;
-
-    for (size_t i = 0; i < levels_[level + 1].size(); i++) {
-        const auto &meta = levels_[level + 1][i];
-
-        if (!(meta.maxKey < srcMeta.minKey || meta.minKey > srcMeta.maxKey)) {
-
-            auto foundIt = std::find_if(sstables_.begin(), sstables_.end(), [&](const SSTable &table) {
-                return table.filename().find("_" + std::to_string(meta.id) + ".") != std::string::npos;
-            });
-
-            if (foundIt != sstables_.end()) {
-                size_t j = std::distance(sstables_.begin(), foundIt);
-                nextLevelSSTIndices.push_back(j);
-                nextLevelMetaIndices.push_back(i);
+    if (level + 1 < oldVersion->levels.size()) {
+        for (const auto &meta : oldVersion->levels[level + 1]) {
+            if (!(meta.maxKey < srcMeta.minKey || meta.minKey > srcMeta.maxKey)) {
+                auto sst = oldVersion->findSSTableById(meta.id);
+                if (sst) {
+                    nextLevelSSTables.push_back(sst);
+                    nextLevelIds.push_back(meta.id);
+                }
             }
         }
     }
 
-    std::vector<size_t> allIndices = {srcSSTIdx};
-    allIndices.insert(allIndices.end(), nextLevelSSTIndices.begin(), nextLevelSSTIndices.end());
+    std::vector<std::shared_ptr<SSTable>> allSSTables;
+    allSSTables.push_back(srcSSTable);
+    allSSTables.insert(allSSTables.end(), nextLevelSSTables.begin(), nextLevelSSTables.end());
 
     std::vector<SSTable::Iterator> iters;
-    iters.reserve(allIndices.size());
-
-    std::transform(allIndices.begin(), allIndices.end(), std::back_inserter(iters),
-                   [&](size_t idx) { return SSTable::Iterator{sstables_[idx]}; });
+    iters.reserve(allSSTables.size());
+    std::transform(allSSTables.begin(), allSSTables.end(), std::back_inserter(iters),
+                   [](const std::shared_ptr<SSTable> &sst) { return SSTable::Iterator{*sst}; });
 
     using HeapElement = std::tuple<std::string, uint64_t, EntryType, size_t>;
     auto cmp = [](const HeapElement &a, const HeapElement &b) {
@@ -736,42 +882,52 @@ void StorageEngine::compactlevelN(uint32_t level) {
         }
     }
 
-    std::filesystem::remove("data/sstables/sstable_" + std::to_string(srcMeta.id) + ".bin");
+    if (merged_data.empty())
+        return;
 
-    for (size_t idx : nextLevelMetaIndices) {
-        std::filesystem::remove("data/sstables/sstable_" + std::to_string(levels_[level + 1][idx].id) + ".bin");
+    uint64_t new_flush_counter;
+    {
+        std::lock_guard<std::mutex> lock(metadata_mutex_);
+        flush_counter_++;
+        new_flush_counter = flush_counter_;
     }
 
-    std::sort(allIndices.rbegin(), allIndices.rend());
-    for (size_t idx : allIndices) {
-        sstables_.erase(sstables_.begin() + idx);
-    }
-
-    flush_counter_++;
-
-    SSTable newSSTable = SSTable::flush(merged_data, dir_path, flush_counter_);
-    sstables_.push_back(std::move(newSSTable));
+    auto newSSTable = std::make_shared<SSTable>(SSTable::flush(merged_data, dir_path, new_flush_counter));
 
     SSTableMeta newMeta;
-    newMeta.id = flush_counter_;
+    newMeta.id = new_flush_counter;
     newMeta.level = level + 1;
     newMeta.minKey = merged_data.begin()->first;
     newMeta.maxKey = merged_data.rbegin()->first;
     newMeta.maxSeq = seq_number_ - 1;
-    newMeta.sizeBytes = std::filesystem::file_size(dir_path + "sstable_" + std::to_string(flush_counter_) + ".bin");
+    newMeta.sizeBytes = std::filesystem::file_size(dir_path + "sstable_" + std::to_string(new_flush_counter) + ".bin");
 
-    levels_[level].erase(levels_[level].begin() + srcMetaIdx);
+    auto newVersion = version_manager_.getVersionForModification();
 
-    std::sort(nextLevelMetaIndices.rbegin(), nextLevelMetaIndices.rend());
-    for (size_t idx : nextLevelMetaIndices) {
-        levels_[level + 1].erase(levels_[level + 1].begin() + idx);
+    if (newVersion->levels.size() <= level + 1) {
+        newVersion->levels.resize(level + 2);
     }
 
-    levels_[level + 1].push_back(newMeta);
-    std::sort(levels_[level + 1].begin(), levels_[level + 1].end(),
+    std::vector<uint64_t> idsToRemove = {srcMeta.id};
+    idsToRemove.insert(idsToRemove.end(), nextLevelIds.begin(), nextLevelIds.end());
+    newVersion->removeSSTablesByIds(idsToRemove);
+
+    newVersion->addSSTable(std::move(newSSTable), newMeta);
+    newVersion->flush_counter = new_flush_counter;
+
+    std::sort(newVersion->levels[level + 1].begin(), newVersion->levels[level + 1].end(),
               [](const SSTableMeta &a, const SSTableMeta &b) { return a.minKey < b.minKey; });
 
-    saveMetadata();
+    version_manager_.installVersion(newVersion);
+
+    {
+        std::lock_guard<std::mutex> lock(metadata_mutex_);
+        saveMetadata();
+    }
+
+    for (uint64_t id : idsToRemove) {
+        std::filesystem::remove("data/sstables/sstable_" + std::to_string(id) + ".bin");
+    }
 
     if (cache_) {
         cache_->clear();
@@ -779,10 +935,8 @@ void StorageEngine::compactlevelN(uint32_t level) {
 }
 
 void StorageEngine::waitForCompaction() {
-    // Small delay to make sure that compaction thread has started if it was just scheduled
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    // Wait until no compaction is in progress
     std::unique_lock<std::mutex> lock(compaction_mutex_);
     compaction_cv_.wait_for(lock, std::chrono::seconds(5), [this] {
         return !compaction_in_progress_.load(std::memory_order_acquire) && !compaction_needed_.load(std::memory_order_acquire);

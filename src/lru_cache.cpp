@@ -4,6 +4,7 @@ LRUCache::LRUCache(size_t capacity) : capacity_(capacity) {
 }
 
 std::optional<Entry> LRUCache::get(const std::string &key) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = cache_.find(key);
     if (it == cache_.end()) {
         return std::nullopt;
@@ -15,6 +16,7 @@ std::optional<Entry> LRUCache::get(const std::string &key) {
 }
 
 void LRUCache::put(const std::string &key, const Entry &entry) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = cache_.find(key);
 
     if (it != cache_.end()) {
@@ -34,11 +36,13 @@ void LRUCache::put(const std::string &key, const Entry &entry) {
 }
 
 void LRUCache::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
     cache_.clear();
     lru_list_.clear();
 }
 
 void LRUCache::invalidate(const std::string &key) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = cache_.find(key);
     if (it != cache_.end()) {
         lru_list_.erase(it->second.list_iter);
@@ -47,5 +51,6 @@ void LRUCache::invalidate(const std::string &key) {
 }
 
 size_t LRUCache::size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
     return cache_.size();
 }

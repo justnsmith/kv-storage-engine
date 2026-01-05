@@ -3,18 +3,18 @@
 
 #include "bloom_filter.h"
 #include "types.h"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
-#include <vector>
-#include <algorithm>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 class SSTable {
   public:
@@ -37,19 +37,11 @@ class SSTable {
 
         void readNext();
     };
-    // Constructor for loading an existing SSTable from disk
+
     explicit SSTable(const std::string &path);
-
-    // Constructor for creating a new SSTable from a MemTable snapshot
-    // flush_counter is used to generate the filename
     static SSTable flush(const std::map<std::string, Entry> &snapshot, const std::string &dir_path, uint64_t flush_counter);
-
-    // Retrieve a value by key. Returns std::nullopt if key not found.
     std::optional<Entry> get(const std::string &key) const;
-
-    // Return the filename for this SSTable
     const std::string &filename() const;
-
     std::map<std::string, Entry> getData() const;
 
   private:

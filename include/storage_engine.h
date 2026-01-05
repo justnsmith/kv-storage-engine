@@ -5,8 +5,10 @@
 #include "lru_cache.h"
 #include "memtable.h"
 #include "sstable.h"
+#include "table_version.h"
 #include "types.h"
 #include "wal.h"
+#include "write_queue.h"
 
 #include <algorithm>
 #include <atomic>
@@ -17,6 +19,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <numeric>
 #include <optional>
@@ -40,6 +43,10 @@ class StorageEngine {
     bool put(const std::string &key, const std::string &value);
     bool del(const std::string &key);
     bool get(const std::string &key, Entry &out) const;
+
+    std::future<bool> putAsync(const std::string &key, const std::string &value);
+    std::future<bool> delAsync(const std::string &key);
+
     void ls() const;
     void flush();
     void handleCommand(const std::string &input);
@@ -53,15 +60,28 @@ class StorageEngine {
   private:
     // Core storage components
     WriteAheadLog wal_;
-    MemTable memtable_;
-    std::vector<SSTable> sstables_;
-    std::vector<std::vector<SSTableMeta>> levels_;
+    MemTable memtable_;                           
+    std::shared_ptr<MemTable> immutable_memtable_; // Immutable memtable being flushed (atomic access)
+    VersionManager version_manager_;
     uint64_t flush_counter_;
     uint64_t seq_number_;
     mutable std::optional<LRUCache> cache_;
 
-    // Threading components
-    mutable std::shared_mutex state_mutex_;
+    // Threading components - protects flush_counter_, seq_number_, metadata writes
+    mutable std::mutex metadata_mutex_;
+
+    // Writer thread
+    WriteQueue write_queue_;
+    std::thread writer_thread_;
+    std::atomic<bool> writer_shutdown_{false};
+
+    // Flush thread
+    std::thread flush_thread_;
+    mutable std::mutex flush_mutex_;
+    mutable std::condition_variable flush_cv_;
+    std::atomic<bool> flush_pending_{false};
+
+    // Compaction thread
     std::thread compaction_thread_;
     std::atomic<bool> shutdown_{false};
     std::condition_variable compaction_cv_;
@@ -76,6 +96,10 @@ class StorageEngine {
     void loadSSTables();
     void saveMetadata();
 
+    void writerThreadLoop();
+    void flushThreadLoop();
+    void triggerFlush();
+
     // Compaction methods
     void compactL0toL1();
     void compactlevelN(uint32_t level);
@@ -84,6 +108,7 @@ class StorageEngine {
     void compactionThreadLoop();
     void scheduleCompaction();
     bool shouldCompactUnlocked(uint32_t level) const;
+    static bool shouldCompactUnlocked(uint32_t level, const std::shared_ptr<TableVersion> &version);
     void maybeCompactBackground();
 };
 
