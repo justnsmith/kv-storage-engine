@@ -10,6 +10,8 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -21,24 +23,27 @@ class SSTable {
     class Iterator {
       public:
         explicit Iterator(const SSTable &table);
-
         bool valid() const;
-
         const SSTableEntry &entry() const;
-
         void next();
 
       private:
         std::ifstream file_;
         uint64_t data_end_;
         bool valid_ = false;
-
         SSTableEntry current_;
-
         void readNext();
     };
 
     explicit SSTable(const std::string &path);
+    ~SSTable();
+
+    // Disable copy, enable move
+    SSTable(const SSTable &) = delete;
+    SSTable &operator=(const SSTable &) = delete;
+    SSTable(SSTable &&other) noexcept;
+    SSTable &operator=(SSTable &&other) noexcept;
+
     static SSTable flush(const std::map<std::string, Entry> &snapshot, const std::string &dir_path, uint64_t flush_counter);
     std::optional<Entry> get(const std::string &key) const;
     const std::string &filename() const;
@@ -52,10 +57,16 @@ class SSTable {
     std::vector<IndexEntry> index_;
     std::unique_ptr<BloomFilter> bloom_filter_;
 
+    // File handle caching
+    mutable std::unique_ptr<std::ifstream> cached_file_;
+    mutable std::mutex file_mutex_;
+
     static constexpr size_t INDEX_INTERVAL = 16;
     static constexpr double BLOOM_FP_RATE = 0.01;
 
     void loadMetadata();
+    std::ifstream &getFile() const;
+    void closeFile() const;
 
     friend class Iterator;
 };

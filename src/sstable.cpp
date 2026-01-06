@@ -4,6 +4,53 @@ SSTable::SSTable(const std::string &path) : path_(path) {
     loadMetadata();
 }
 
+SSTable::~SSTable() {
+    closeFile();
+}
+
+// cppcheck-suppress missingMemberCopy
+SSTable::SSTable(SSTable &&other) noexcept
+    : path_(std::move(other.path_)), min_key_(std::move(other.min_key_)), max_key_(std::move(other.max_key_)),
+      metadata_offset_(other.metadata_offset_), index_(std::move(other.index_)), bloom_filter_(std::move(other.bloom_filter_)),
+      cached_file_(std::move(other.cached_file_)) {
+}
+
+SSTable &SSTable::operator=(SSTable &&other) noexcept {
+    if (this != &other) {
+        closeFile();
+
+        path_ = std::move(other.path_);
+        min_key_ = std::move(other.min_key_);
+        max_key_ = std::move(other.max_key_);
+        metadata_offset_ = other.metadata_offset_;
+        index_ = std::move(other.index_);
+        bloom_filter_ = std::move(other.bloom_filter_);
+        cached_file_ = std::move(other.cached_file_);
+    }
+    return *this;
+}
+
+std::ifstream &SSTable::getFile() const {
+    std::lock_guard<std::mutex> lock(file_mutex_);
+
+    if (!cached_file_ || !cached_file_->is_open()) {
+        cached_file_ = std::make_unique<std::ifstream>(path_, std::ios::binary);
+        if (!*cached_file_) {
+            throw std::runtime_error("Failed to open SSTable: " + path_);
+        }
+    }
+
+    return *cached_file_;
+}
+
+void SSTable::closeFile() const {
+    std::lock_guard<std::mutex> lock(file_mutex_);
+    if (cached_file_ && cached_file_->is_open()) {
+        cached_file_->close();
+    }
+    cached_file_.reset();
+}
+
 SSTable SSTable::flush(const std::map<std::string, Entry> &snapshot, const std::string &dir_path, uint64_t flush_counter) {
     std::string full_path = dir_path + "sstable_" + std::to_string(flush_counter) + ".bin";
 
@@ -94,9 +141,8 @@ std::optional<Entry> SSTable::get(const std::string &key) const {
         return std::nullopt;
     }
 
-    std::ifstream file(path_, std::ios::binary);
-    if (!file)
-        throw std::runtime_error("Failed to open SSTable: " + path_);
+    // Get the cached file handle
+    std::ifstream &file = getFile();
 
     // Binary search index to find start position
     uint64_t search_start = 0;
@@ -114,6 +160,9 @@ std::optional<Entry> SSTable::get(const std::string &key) const {
             search_end = (it + 1)->offset;
         }
     }
+
+    // Lock for the actual file I/O operations
+    std::lock_guard<std::mutex> lock(file_mutex_);
 
     file.seekg(search_start);
 
@@ -149,7 +198,11 @@ std::optional<Entry> SSTable::get(const std::string &key) const {
 
 std::map<std::string, Entry> SSTable::getData() const {
     std::map<std::string, Entry> data;
-    std::ifstream file(path_, std::ios::binary);
+
+    std::ifstream &file = getFile();
+    std::lock_guard<std::mutex> lock(file_mutex_);
+
+    file.seekg(0);
 
     while (file.tellg() < static_cast<std::streampos>(metadata_offset_)) {
         uint64_t seq;

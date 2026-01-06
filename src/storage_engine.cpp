@@ -345,7 +345,15 @@ void StorageEngine::checkFlush(bool debug) {
             }
 
             auto new_immutable = std::make_shared<MemTable>();
-            std::swap(memtable_, *new_immutable);
+            auto snapshot = memtable_.snapshot();
+            for (const auto &[key, entry] : snapshot) {
+                if (entry.type == EntryType::PUT) {
+                    new_immutable->put(key, entry.value, entry.seq);
+                } else {
+                    new_immutable->del(key, entry.seq);
+                }
+            }
+            memtable_.clear();
 
             std::atomic_store(&immutable_memtable_, new_immutable);
 
