@@ -1,6 +1,7 @@
 #include "storage_engine.h"
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <random>
@@ -28,32 +29,42 @@ struct BenchmarkResult {
     double duration_ms;
 };
 
-// Benchmark concurrent writes
+// Benchmark concurrent writes using ASYNC API for true throughput
 BenchmarkResult benchmarkConcurrentWrites(StorageEngine &engine, size_t num_threads, size_t ops_per_thread, size_t value_size) {
     std::vector<std::thread> threads;
     std::atomic<size_t> total_ops{0};
-    std::vector<std::vector<double>> thread_latencies(num_threads);
 
     auto start = std::chrono::high_resolution_clock::now();
 
     for (size_t t = 0; t < num_threads; ++t) {
         threads.emplace_back([&, t]() {
             std::mt19937 gen(t * 12345 + std::random_device{}());
-            std::vector<double> &latencies = thread_latencies[t];
-            latencies.reserve(ops_per_thread);
+
+            constexpr size_t BATCH_SIZE = 1000;
+            std::vector<std::future<bool>> futures;
+            futures.reserve(BATCH_SIZE);
 
             for (size_t i = 0; i < ops_per_thread; ++i) {
                 std::string key = "t" + std::to_string(t) + "_key_" + std::to_string(i);
                 std::string value = generateRandomString(value_size, gen);
 
-                auto op_start = std::chrono::high_resolution_clock::now();
-                engine.put(key, value);
-                auto op_end = std::chrono::high_resolution_clock::now();
+                futures.push_back(engine.putAsync(key, value));
 
-                double latency_us = std::chrono::duration<double, std::micro>(op_end - op_start).count();
-                latencies.push_back(latency_us);
-                total_ops.fetch_add(1, std::memory_order_relaxed);
+                // Wait for batch completion periodically
+                if (futures.size() >= BATCH_SIZE) {
+                    for (auto &f : futures) {
+                        f.get();
+                    }
+                    futures.clear();
+                }
             }
+
+            // Wait for remaining futures
+            for (auto &f : futures) {
+                f.get();
+            }
+
+            total_ops.fetch_add(ops_per_thread, std::memory_order_relaxed);
         });
     }
 
@@ -64,37 +75,131 @@ BenchmarkResult benchmarkConcurrentWrites(StorageEngine &engine, size_t num_thre
     auto end = std::chrono::high_resolution_clock::now();
     double duration_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
-    // Aggregate latencies
-    std::vector<double> all_latencies;
-    for (const auto &tl : thread_latencies) {
-        all_latencies.insert(all_latencies.end(), tl.begin(), tl.end());
-    }
-    std::sort(all_latencies.begin(), all_latencies.end());
+    BenchmarkResult result;
+    result.total_ops = total_ops.load();
+    result.duration_ms = duration_ms;
+    result.throughput_ops_sec = (result.total_ops * 1000.0) / duration_ms;
+    result.latency_avg_us = 0;
+    result.latency_p99_us = 0;
 
-    double avg_latency = 0;
-    for (double l : all_latencies) {
-        avg_latency += l;
-    }
-    avg_latency /= all_latencies.size();
+    return result;
+}
 
-    double p99_latency = all_latencies[static_cast<size_t>(all_latencies.size() * 0.99)];
+// Benchmark concurrent writes using ASYNC API for true throughput (sequential keys)
+BenchmarkResult benchmarkConcurrentWritesSequential(StorageEngine &engine, size_t num_threads, size_t ops_per_thread, size_t value_size) {
+    std::vector<std::thread> threads;
+    std::atomic<size_t> total_ops{0};
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    for (size_t t = 0; t < num_threads; ++t) {
+        threads.emplace_back([&, t]() {
+            std::mt19937 gen(t * 12345 + std::random_device{}());
+
+            constexpr size_t BATCH_SIZE = 1000;
+            std::vector<std::future<bool>> futures;
+            futures.reserve(BATCH_SIZE);
+
+            for (size_t i = 0; i < ops_per_thread; ++i) {
+                std::string key = "t" + std::to_string(t) + "_key_" + std::to_string(i);
+                std::string value = generateRandomString(value_size, gen);
+
+                futures.push_back(engine.putAsync(key, value));
+
+                if (futures.size() >= BATCH_SIZE) {
+                    for (auto &f : futures) {
+                        f.get();
+                    }
+                    futures.clear();
+                }
+            }
+
+            for (auto &f : futures) {
+                f.get();
+            }
+
+            total_ops.fetch_add(ops_per_thread, std::memory_order_relaxed);
+        });
+    }
+
+    for (auto &t : threads) {
+        t.join();
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    double duration_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
     BenchmarkResult result;
     result.total_ops = total_ops.load();
     result.duration_ms = duration_ms;
     result.throughput_ops_sec = (result.total_ops * 1000.0) / duration_ms;
-    result.latency_avg_us = avg_latency;
-    result.latency_p99_us = p99_latency;
+    result.latency_avg_us = 0;
+    result.latency_p99_us = 0;
 
     return result;
 }
 
-// Benchmark concurrent reads
+// Benchmark concurrent writes using ASYNC API with random keys
+BenchmarkResult benchmarkConcurrentWritesRandom(StorageEngine &engine, size_t num_threads, size_t ops_per_thread, size_t value_size,
+                                                size_t key_range) {
+    std::vector<std::thread> threads;
+    std::atomic<size_t> total_ops{0};
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    for (size_t t = 0; t < num_threads; ++t) {
+        threads.emplace_back([&, t]() {
+            std::mt19937 gen(t * 12345 + std::random_device{}());
+            std::uniform_int_distribution<size_t> key_dis(0, key_range - 1);
+
+            constexpr size_t BATCH_SIZE = 1000;
+            std::vector<std::future<bool>> futures;
+            futures.reserve(BATCH_SIZE);
+
+            for (size_t i = 0; i < ops_per_thread; ++i) {
+                std::string key = "key_" + std::to_string(key_dis(gen));
+                std::string value = generateRandomString(value_size, gen);
+
+                futures.push_back(engine.putAsync(key, value));
+
+                if (futures.size() >= BATCH_SIZE) {
+                    for (auto &f : futures) {
+                        f.get();
+                    }
+                    futures.clear();
+                }
+            }
+
+            for (auto &f : futures) {
+                f.get();
+            }
+
+            total_ops.fetch_add(ops_per_thread, std::memory_order_relaxed);
+        });
+    }
+
+    for (auto &t : threads) {
+        t.join();
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    double duration_ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+    BenchmarkResult result;
+    result.total_ops = total_ops.load();
+    result.duration_ms = duration_ms;
+    result.throughput_ops_sec = (result.total_ops * 1000.0) / duration_ms;
+    result.latency_avg_us = 0;
+    result.latency_p99_us = 0;
+
+    return result;
+}
+
+// Benchmark concurrent reads (no async needed for reads)
 BenchmarkResult benchmarkConcurrentReads(StorageEngine &engine, size_t num_threads, size_t ops_per_thread, size_t total_keys) {
     std::vector<std::thread> threads;
     std::atomic<size_t> total_ops{0};
     std::atomic<size_t> hits{0};
-    std::vector<std::vector<double>> thread_latencies(num_threads);
 
     auto start = std::chrono::high_resolution_clock::now();
 
@@ -102,23 +207,15 @@ BenchmarkResult benchmarkConcurrentReads(StorageEngine &engine, size_t num_threa
         threads.emplace_back([&, t]() {
             std::mt19937 gen(t * 12345 + std::random_device{}());
             std::uniform_int_distribution<size_t> key_dis(0, total_keys - 1);
-            std::vector<double> &latencies = thread_latencies[t];
-            latencies.reserve(ops_per_thread);
 
             for (size_t i = 0; i < ops_per_thread; ++i) {
                 std::string key = "key_" + std::to_string(key_dis(gen));
-
-                auto op_start = std::chrono::high_resolution_clock::now();
                 Entry result;
                 bool found = engine.get(key, result);
-                auto op_end = std::chrono::high_resolution_clock::now();
 
                 if (found) {
                     hits.fetch_add(1, std::memory_order_relaxed);
                 }
-
-                double latency_us = std::chrono::duration<double, std::micro>(op_end - op_start).count();
-                latencies.push_back(latency_us);
                 total_ops.fetch_add(1, std::memory_order_relaxed);
             }
         });
@@ -131,39 +228,23 @@ BenchmarkResult benchmarkConcurrentReads(StorageEngine &engine, size_t num_threa
     auto end = std::chrono::high_resolution_clock::now();
     double duration_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
-    // Aggregate latencies
-    std::vector<double> all_latencies;
-    for (const auto &tl : thread_latencies) {
-        all_latencies.insert(all_latencies.end(), tl.begin(), tl.end());
-    }
-    std::sort(all_latencies.begin(), all_latencies.end());
-
-    double avg_latency = 0;
-    for (double l : all_latencies) {
-        avg_latency += l;
-    }
-    avg_latency /= all_latencies.size();
-
-    double p99_latency = all_latencies[static_cast<size_t>(all_latencies.size() * 0.99)];
-
     BenchmarkResult result;
     result.total_ops = total_ops.load();
     result.duration_ms = duration_ms;
     result.throughput_ops_sec = (result.total_ops * 1000.0) / duration_ms;
-    result.latency_avg_us = avg_latency;
-    result.latency_p99_us = p99_latency;
+    result.latency_avg_us = 0;
+    result.latency_p99_us = 0;
 
     return result;
 }
 
-// Benchmark mixed read/write workload
+// Benchmark mixed read/write workload using async writes
 BenchmarkResult benchmarkMixedWorkload(StorageEngine &engine, size_t num_threads, size_t ops_per_thread, size_t value_size,
                                        size_t total_keys, int read_pct) {
     std::vector<std::thread> threads;
     std::atomic<size_t> total_ops{0};
     std::atomic<size_t> read_ops{0};
     std::atomic<size_t> write_ops{0};
-    std::vector<std::vector<double>> thread_latencies(num_threads);
 
     auto start = std::chrono::high_resolution_clock::now();
 
@@ -172,13 +253,13 @@ BenchmarkResult benchmarkMixedWorkload(StorageEngine &engine, size_t num_threads
             std::mt19937 gen(t * 12345 + std::random_device{}());
             std::uniform_int_distribution<size_t> key_dis(0, total_keys - 1);
             std::uniform_int_distribution<int> op_dis(0, 99);
-            std::vector<double> &latencies = thread_latencies[t];
-            latencies.reserve(ops_per_thread);
+
+            constexpr size_t BATCH_SIZE = 1000;
+            std::vector<std::future<bool>> futures;
+            futures.reserve(BATCH_SIZE);
 
             for (size_t i = 0; i < ops_per_thread; ++i) {
                 std::string key = "key_" + std::to_string(key_dis(gen));
-
-                auto op_start = std::chrono::high_resolution_clock::now();
 
                 if (op_dis(gen) < read_pct) {
                     Entry result;
@@ -186,15 +267,23 @@ BenchmarkResult benchmarkMixedWorkload(StorageEngine &engine, size_t num_threads
                     read_ops.fetch_add(1, std::memory_order_relaxed);
                 } else {
                     std::string value = generateRandomString(value_size, gen);
-                    engine.put(key, value);
+                    futures.push_back(engine.putAsync(key, value));
                     write_ops.fetch_add(1, std::memory_order_relaxed);
+
+                    if (futures.size() >= BATCH_SIZE) {
+                        for (auto &f : futures) {
+                            f.get();
+                        }
+                        futures.clear();
+                    }
                 }
 
-                auto op_end = std::chrono::high_resolution_clock::now();
-
-                double latency_us = std::chrono::duration<double, std::micro>(op_end - op_start).count();
-                latencies.push_back(latency_us);
                 total_ops.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            // Wait for remaining futures
+            for (auto &f : futures) {
+                f.get();
             }
         });
     }
@@ -206,44 +295,27 @@ BenchmarkResult benchmarkMixedWorkload(StorageEngine &engine, size_t num_threads
     auto end = std::chrono::high_resolution_clock::now();
     double duration_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
-    // Aggregate latencies
-    std::vector<double> all_latencies;
-    for (const auto &tl : thread_latencies) {
-        all_latencies.insert(all_latencies.end(), tl.begin(), tl.end());
-    }
-    std::sort(all_latencies.begin(), all_latencies.end());
-
-    double avg_latency = 0;
-    for (double l : all_latencies) {
-        avg_latency += l;
-    }
-    avg_latency /= all_latencies.size();
-
-    double p99_latency = all_latencies[static_cast<size_t>(all_latencies.size() * 0.99)];
-
     BenchmarkResult result;
     result.total_ops = total_ops.load();
     result.duration_ms = duration_ms;
     result.throughput_ops_sec = (result.total_ops * 1000.0) / duration_ms;
-    result.latency_avg_us = avg_latency;
-    result.latency_p99_us = p99_latency;
+    result.latency_avg_us = 0;
+    result.latency_p99_us = 0;
 
     return result;
 }
 
 void printHeader(const std::string &title) {
-    std::cout << "\n" << std::string(60, '=') << "\n";
+    std::cout << "\n" << std::string(70, '=') << "\n";
     std::cout << title << "\n";
-    std::cout << std::string(60, '=') << "\n";
+    std::cout << std::string(70, '=') << "\n";
 }
 
 void printResult(size_t threads, const BenchmarkResult &result) {
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "  " << std::setw(2) << threads << " threads: ";
-    std::cout << std::setw(10) << result.throughput_ops_sec << " ops/sec | ";
-    std::cout << "avg: " << std::setw(8) << result.latency_avg_us << " µs | ";
-    std::cout << "p99: " << std::setw(8) << result.latency_p99_us << " µs | ";
-    std::cout << "total: " << result.total_ops << " ops in " << result.duration_ms << " ms\n";
+    std::cout << std::setw(12) << result.throughput_ops_sec << " ops/sec";
+    std::cout << " | " << result.total_ops << " ops in " << static_cast<int>(result.duration_ms) << " ms\n";
 }
 
 void printScalingSummary(const std::vector<size_t> &thread_counts, const std::vector<BenchmarkResult> &results) {
@@ -259,36 +331,46 @@ void printScalingSummary(const std::vector<size_t> &thread_counts, const std::ve
 }
 
 int main() {
-    std::cout << "╔══════════════════════════════════════════════════════════╗\n";
-    std::cout << "║       Multi-threaded Storage Engine Benchmark            ║\n";
-    std::cout << "╚══════════════════════════════════════════════════════════╝\n";
+    std::cout << "╔════════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║          Multi-threaded Storage Engine Benchmark                  ║\n";
+    std::cout << "╚════════════════════════════════════════════════════════════════════╝\n";
 
     const std::vector<size_t> thread_counts = {1, 2, 4, 8, 16};
-    const size_t ops_per_thread = 10000;
+    const size_t ops_per_thread = 100000;
     const size_t value_size = 100;
     const size_t total_keys = 100000;
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Benchmark 1: Concurrent Writes
-    // ═══════════════════════════════════════════════════════════════════
-    printHeader("Benchmark 1: Concurrent Writes");
-    std::cout << "  Config: " << ops_per_thread << " ops/thread, " << value_size << "B values\n\n";
+    printHeader("Benchmark 1: Concurrent Writes - Sequential Keys");
+    std::cout << "  Config: " << ops_per_thread << " ops/thread, " << value_size << "B values\n";
+    std::cout << "  Each thread writes to unique key space (no contention)\n\n";
 
-    std::vector<BenchmarkResult> write_results;
+    std::vector<BenchmarkResult> write_seq_results;
     for (size_t threads : thread_counts) {
         std::filesystem::remove_all("data");
         StorageEngine engine("data/log.bin", 0);
 
-        auto result = benchmarkConcurrentWrites(engine, threads, ops_per_thread, value_size);
-        write_results.push_back(result);
+        auto result = benchmarkConcurrentWritesSequential(engine, threads, ops_per_thread, value_size);
+        write_seq_results.push_back(result);
         printResult(threads, result);
     }
-    printScalingSummary(thread_counts, write_results);
+    printScalingSummary(thread_counts, write_seq_results);
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Benchmark 2: Concurrent Reads
-    // ═══════════════════════════════════════════════════════════════════
-    printHeader("Benchmark 2: Concurrent Reads");
+    printHeader("Benchmark 2: Concurrent Writes - Random Keys");
+    std::cout << "  Config: " << ops_per_thread << " ops/thread, " << value_size << "B values\n";
+    std::cout << "  Key range: " << total_keys << " (overlapping writes)\n\n";
+
+    std::vector<BenchmarkResult> write_rand_results;
+    for (size_t threads : thread_counts) {
+        std::filesystem::remove_all("data");
+        StorageEngine engine("data/log.bin", 0);
+
+        auto result = benchmarkConcurrentWritesRandom(engine, threads, ops_per_thread, value_size, total_keys);
+        write_rand_results.push_back(result);
+        printResult(threads, result);
+    }
+    printScalingSummary(thread_counts, write_rand_results);
+
+    printHeader("Benchmark 3: Concurrent Reads");
     std::cout << "  Config: " << ops_per_thread << " ops/thread, " << total_keys << " keys pre-loaded\n\n";
 
     // Pre-populate data once
@@ -296,10 +378,26 @@ int main() {
         std::filesystem::remove_all("data");
         StorageEngine engine("data/log.bin", 1000);
         std::mt19937 gen(42);
+
+        constexpr size_t BATCH_SIZE = 1000;
+        std::vector<std::future<bool>> futures;
+        futures.reserve(BATCH_SIZE);
+
         for (size_t i = 0; i < total_keys; ++i) {
             std::string key = "key_" + std::to_string(i);
             std::string value = generateRandomString(value_size, gen);
-            engine.put(key, value);
+            futures.push_back(engine.putAsync(key, value));
+
+            if (futures.size() >= BATCH_SIZE) {
+                for (auto &f : futures) {
+                    f.get();
+                }
+                futures.clear();
+            }
+        }
+
+        for (auto &f : futures) {
+            f.get();
         }
     }
 
@@ -314,59 +412,66 @@ int main() {
     }
     printScalingSummary(thread_counts, read_results);
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Benchmark 3: Mixed Workload (70% reads, 30% writes)
-    // ═══════════════════════════════════════════════════════════════════
-    printHeader("Benchmark 3: Mixed Workload (70% reads, 30% writes)");
+    printHeader("Benchmark 4: Mixed Workload (70% reads, 30% writes)");
     std::cout << "  Config: " << ops_per_thread << " ops/thread, " << total_keys << " key range\n\n";
 
-    std::vector<BenchmarkResult> mixed_results;
+    std::vector<BenchmarkResult> mixed_70_results;
     for (size_t threads : thread_counts) {
         std::filesystem::remove_all("data");
         StorageEngine engine("data/log.bin", 1000);
 
         // Pre-populate with half the keys
         std::mt19937 gen(42);
+        constexpr size_t BATCH_SIZE = 1000;
+        std::vector<std::future<bool>> futures;
+        futures.reserve(BATCH_SIZE);
+
         for (size_t i = 0; i < total_keys / 2; ++i) {
             std::string key = "key_" + std::to_string(i);
             std::string value = generateRandomString(value_size, gen);
-            engine.put(key, value);
+            futures.push_back(engine.putAsync(key, value));
+
+            if (futures.size() >= BATCH_SIZE) {
+                for (auto &f : futures) {
+                    f.get();
+                }
+                futures.clear();
+            }
+        }
+
+        for (auto &f : futures) {
+            f.get();
         }
 
         auto result = benchmarkMixedWorkload(engine, threads, ops_per_thread, value_size, total_keys, 70);
-        mixed_results.push_back(result);
+        mixed_70_results.push_back(result);
         printResult(threads, result);
     }
-    printScalingSummary(thread_counts, mixed_results);
+    printScalingSummary(thread_counts, mixed_70_results);
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Benchmark 4: Write-heavy Workload (20% reads, 80% writes)
-    // ═══════════════════════════════════════════════════════════════════
-    printHeader("Benchmark 4: Write-heavy Workload (20% reads, 80% writes)");
+    printHeader("Benchmark 5: Write-heavy Workload (20% reads, 80% writes)");
     std::cout << "  Config: " << ops_per_thread << " ops/thread, " << total_keys << " key range\n\n";
 
-    std::vector<BenchmarkResult> write_heavy_results;
+    std::vector<BenchmarkResult> mixed_20_results;
     for (size_t threads : thread_counts) {
         std::filesystem::remove_all("data");
         StorageEngine engine("data/log.bin", 1000);
 
         auto result = benchmarkMixedWorkload(engine, threads, ops_per_thread, value_size, total_keys, 20);
-        write_heavy_results.push_back(result);
+        mixed_20_results.push_back(result);
         printResult(threads, result);
     }
-    printScalingSummary(thread_counts, write_heavy_results);
+    printScalingSummary(thread_counts, mixed_20_results);
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Summary
-    // ═══════════════════════════════════════════════════════════════════
-    std::cout << "\n" << std::string(60, '=') << "\n";
+    std::cout << "\n" << std::string(70, '=') << "\n";
     std::cout << "Summary: Peak Throughput at 16 threads\n";
-    std::cout << std::string(60, '=') << "\n";
+    std::cout << std::string(70, '=') << "\n";
     std::cout << std::fixed << std::setprecision(0);
-    std::cout << "  Writes only:     " << std::setw(10) << write_results.back().throughput_ops_sec << " ops/sec\n";
-    std::cout << "  Reads only:      " << std::setw(10) << read_results.back().throughput_ops_sec << " ops/sec\n";
-    std::cout << "  Mixed (70r/30w): " << std::setw(10) << mixed_results.back().throughput_ops_sec << " ops/sec\n";
-    std::cout << "  Write-heavy:     " << std::setw(10) << write_heavy_results.back().throughput_ops_sec << " ops/sec\n";
+    std::cout << "  Sequential writes:    " << std::setw(12) << write_seq_results.back().throughput_ops_sec << " ops/sec\n";
+    std::cout << "  Random writes:        " << std::setw(12) << write_rand_results.back().throughput_ops_sec << " ops/sec\n";
+    std::cout << "  Reads only:           " << std::setw(12) << read_results.back().throughput_ops_sec << " ops/sec\n";
+    std::cout << "  Mixed (70r/30w):      " << std::setw(12) << mixed_70_results.back().throughput_ops_sec << " ops/sec\n";
+    std::cout << "  Write-heavy (20r/80w):" << std::setw(12) << mixed_20_results.back().throughput_ops_sec << " ops/sec\n";
 
     std::filesystem::remove_all("data");
 
