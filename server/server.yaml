@@ -1,0 +1,14 @@
+# KV Storage Engine Server Configuration
+
+server:
+  host: "127.0.0.1"
+  port: 9000
+  threads: 4
+
+storage:
+  data_dir: "data"
+  cache_size: 1000
+
+# Logging (for future use)
+logging:
+  level: "info"
