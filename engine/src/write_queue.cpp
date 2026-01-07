@@ -87,7 +87,6 @@ void WriteQueue::shutdown() {
     not_full_cv_.notify_all();
 }
 
-// cppcheck-suppress unusedFunction
 bool WriteQueue::isShutdown() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return shutdown_;
