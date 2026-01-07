@@ -5,11 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_compile_options(-Wall -Wextra -Wpedantic -O2)
-
-include_directories(include)
-
-find_library(ZLIB_LIB z)
+find_package(ZLIB REQUIRED)
 
 set(CORE_SOURCES
     src/command_parser.cpp
@@ -25,32 +21,34 @@ set(CORE_SOURCES
 )
 
 add_library(core STATIC ${CORE_SOURCES})
-target_link_libraries(core PUBLIC ${ZLIB_LIB})
+target_include_directories(core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(core PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(core PUBLIC ZLIB::ZLIB)
 
 add_executable(main src/main.cpp)
 target_link_libraries(main PRIVATE core)
+
+enable_testing()
 
 file(GLOB TEST_SOURCES tests/*.cpp)
 add_executable(tests_runner ${TEST_SOURCES})
 target_link_libraries(tests_runner PRIVATE core)
 
+add_test(NAME kv_tests COMMAND tests_runner)
+
 file(GLOB BENCHMARK_SOURCES benchmarks/*.cpp)
+set(BENCH_TARGETS)
+
 foreach(bench_src ${BENCHMARK_SOURCES})
     get_filename_component(bench_name ${bench_src} NAME_WE)
     add_executable(${bench_name} ${bench_src})
     target_link_libraries(${bench_name} PRIVATE core)
+    list(APPEND BENCH_TARGETS ${bench_name})
 endforeach()
 
-add_custom_target(run COMMAND main DEPENDS main)
-add_custom_target(test COMMAND tests_runner DEPENDS tests_runner)
+add_custom_target(bench DEPENDS ${BENCH_TARGETS})
 
-add_custom_target(bench
-    COMMAND benchmark_write_throughput
-    COMMAND benchmark_read_latency
-    COMMAND benchmark_bloom_filter
-    COMMAND benchmark_compaction
-    COMMAND benchmark_multithreaded
-)
+add_custom_target(run DEPENDS main COMMAND main)
 
 add_custom_target(check
     COMMAND cppcheck --enable=all --inconclusive --std=c++20
@@ -59,7 +57,7 @@ add_custom_target(check
             --suppress=functionConst
             --suppress=normalCheckLevelMaxBranches
             --inline-suppr
-            -I${CMAKE_SOURCE_DIR}/include
-            ${CMAKE_SOURCE_DIR}/src
-            ${CMAKE_SOURCE_DIR}/tests
+            -I${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
 )
