@@ -37,11 +37,7 @@ void benchmarkBloomFilterAccuracy() {
     }
 
     size_t true_positives = 0;
-    for (const auto &key : inserted_keys) {
-        if (bf.contains(key)) {
-            true_positives++;
-        }
-    }
+    true_positives = std::count_if(inserted_keys.begin(), inserted_keys.end(), [&bf](const std::string &key) { return bf.contains(key); });
 
     size_t false_positives = 0;
     const size_t TEST_SIZE = 10000;

@@ -120,7 +120,6 @@ bool StorageEngine::put(const std::string &key, const std::string &value) {
     return result.get();
 }
 
-// cppcheck-suppress unusedFunction
 std::future<bool> StorageEngine::putAsync(const std::string &key, const std::string &value) {
     return write_queue_.push(Operation::PUT, key, value);
 }
@@ -953,12 +952,10 @@ void StorageEngine::waitForCompaction() {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 
-// cppcheck-suppress unusedFunction
 void StorageEngine::pauseCompaction() {
     compaction_paused_.store(true, std::memory_order_release);
 }
 
-// cppcheck-suppress unusedFunction
 void StorageEngine::resumeCompaction() {
     compaction_paused_.store(false, std::memory_order_release);
     scheduleCompaction();

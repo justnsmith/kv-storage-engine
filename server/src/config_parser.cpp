@@ -69,4 +69,3 @@ std::string kv::ConfigParser::trim(const std::string &s) {
     size_t end = s.find_last_not_of(" \t\r\n");
     return s.substr(start, end - start + 1);
 }
-

@@ -1,11 +1,11 @@
 #ifndef TEST_FRAMEWORK_H
 #define TEST_FRAMEWORK_H
 
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <string>
 #include <vector>
-#include <exception>
 
 namespace Color {
 inline constexpr const char *RESET = "\033[0m";
@@ -13,7 +13,7 @@ inline constexpr const char *GREEN = "\033[32m";
 inline constexpr const char *RED = "\033[31m";
 inline constexpr const char *YELLOW = "\033[33m";
 inline constexpr const char *CYAN = "\033[36m";
-}
+} // namespace Color
 
 #define ASSERT_TRUE(cond, msg)                                                                                                             \
     do {                                                                                                                                   \

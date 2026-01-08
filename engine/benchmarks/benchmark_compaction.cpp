@@ -1,4 +1,5 @@
 #include "engine.h"
+#include <algorithm>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
@@ -64,11 +65,8 @@ BenchmarkResults benchmarkCompactionImpact() {
     size_t sstable_count_before = 0;
     std::filesystem::path sstable_dir = "data/sstables";
     if (std::filesystem::exists(sstable_dir)) {
-        for (const auto &entry : std::filesystem::directory_iterator(sstable_dir)) {
-            if (entry.path().extension() == ".bin") {
-                sstable_count_before++;
-            }
-        }
+        sstable_count_before = std::count_if(std::filesystem::directory_iterator(sstable_dir), std::filesystem::directory_iterator{},
+                                             [](const auto &entry) { return entry.path().extension() == ".bin"; });
     }
 
     std::cout << "Phase 2: Reading before compaction (" << sstable_count_before << " SSTables)...\n";
@@ -104,11 +102,8 @@ BenchmarkResults benchmarkCompactionImpact() {
     // Count SSTables after compaction
     size_t sstable_count_after = 0;
     if (std::filesystem::exists(sstable_dir)) {
-        for (const auto &entry : std::filesystem::directory_iterator(sstable_dir)) {
-            if (entry.path().extension() == ".bin") {
-                sstable_count_after++;
-            }
-        }
+        sstable_count_after = std::count_if(std::filesystem::directory_iterator(sstable_dir), std::filesystem::directory_iterator{},
+                                            [](const auto &entry) { return entry.path().extension() == ".bin"; });
     }
 
     std::cout << "Compaction complete (" << sstable_count_after << " SSTables)\n\n";
@@ -191,14 +186,13 @@ void benchmarkUpdateCompaction() {
     double update_time = std::chrono::duration<double, std::milli>(update_end - update_start).count();
 
     // Measure space before compaction
-    size_t space_before = 0;
     std::filesystem::path sstable_dir = "data/sstables";
+    size_t space_before = 0;
     if (std::filesystem::exists(sstable_dir)) {
-        for (const auto &entry : std::filesystem::directory_iterator(sstable_dir)) {
-            if (entry.path().extension() == ".bin") {
-                space_before += std::filesystem::file_size(entry.path());
-            }
-        }
+        space_before = std::accumulate(std::filesystem::directory_iterator(sstable_dir), std::filesystem::directory_iterator{}, size_t{0},
+                                       [](size_t sum, const auto &entry) {
+                                           return entry.path().extension() == ".bin" ? sum + std::filesystem::file_size(entry.path()) : sum;
+                                       });
     }
 
     std::cout << "Updates completed in " << update_time << " ms\n";
@@ -212,11 +206,10 @@ void benchmarkUpdateCompaction() {
     // Measure space after compaction
     size_t space_after = 0;
     if (std::filesystem::exists(sstable_dir)) {
-        for (const auto &entry : std::filesystem::directory_iterator(sstable_dir)) {
-            if (entry.path().extension() == ".bin") {
-                space_after += std::filesystem::file_size(entry.path());
-            }
-        }
+        space_after = std::accumulate(std::filesystem::directory_iterator(sstable_dir), std::filesystem::directory_iterator{}, size_t{0},
+                                      [](size_t sum, const auto &entry) {
+                                          return entry.path().extension() == ".bin" ? sum + std::filesystem::file_size(entry.path()) : sum;
+                                      });
     }
 
     double space_reclaimed = (space_before > 0) ? ((space_before - space_after) * 100.0 / space_before) : 0;
@@ -252,11 +245,11 @@ void benchmarkDeletionCompaction() {
     size_t space_before_deletion = 0;
     std::filesystem::path sstable_dir = "data/sstables";
     if (std::filesystem::exists(sstable_dir)) {
-        for (const auto &entry : std::filesystem::directory_iterator(sstable_dir)) {
-            if (entry.path().extension() == ".bin") {
-                space_before_deletion += std::filesystem::file_size(entry.path());
-            }
-        }
+        space_before_deletion =
+            std::accumulate(std::filesystem::directory_iterator(sstable_dir), std::filesystem::directory_iterator{}, size_t{0},
+                            [](size_t sum, const auto &entry) {
+                                return entry.path().extension() == ".bin" ? sum + std::filesystem::file_size(entry.path()) : sum;
+                            });
     }
 
     std::cout << "Space before deletions: " << (space_before_deletion / 1024.0) << " KB\n";
@@ -271,11 +264,11 @@ void benchmarkDeletionCompaction() {
 
     size_t space_with_tombstones = 0;
     if (std::filesystem::exists(sstable_dir)) {
-        for (const auto &entry : std::filesystem::directory_iterator(sstable_dir)) {
-            if (entry.path().extension() == ".bin") {
-                space_with_tombstones += std::filesystem::file_size(entry.path());
-            }
-        }
+        space_with_tombstones =
+            std::accumulate(std::filesystem::directory_iterator(sstable_dir), std::filesystem::directory_iterator{}, size_t{0},
+                            [](size_t sum, const auto &entry) {
+                                return entry.path().extension() == ".bin" ? sum + std::filesystem::file_size(entry.path()) : sum;
+                            });
     }
 
     std::cout << "Space with tombstones: " << (space_with_tombstones / 1024.0) << " KB\n\n";
@@ -287,11 +280,11 @@ void benchmarkDeletionCompaction() {
 
     size_t space_after_compaction = 0;
     if (std::filesystem::exists(sstable_dir)) {
-        for (const auto &entry : std::filesystem::directory_iterator(sstable_dir)) {
-            if (entry.path().extension() == ".bin") {
-                space_after_compaction += std::filesystem::file_size(entry.path());
-            }
-        }
+        space_after_compaction =
+            std::accumulate(std::filesystem::directory_iterator(sstable_dir), std::filesystem::directory_iterator{}, size_t{0},
+                            [](size_t sum, const auto &entry) {
+                                return entry.path().extension() == ".bin" ? sum + std::filesystem::file_size(entry.path()) : sum;
+                            });
     }
 
     std::cout << "Space after compaction: " << (space_after_compaction / 1024.0) << " KB\n";

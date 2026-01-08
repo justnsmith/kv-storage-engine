@@ -218,7 +218,7 @@ echo "Duration: $DURATION"
 echo ""
 
 if [ $OVERALL_STATUS -eq 0 ]; then
-    print_success "CI pipeline passed! 🎉"
+    print_success "CI pipeline passed!"
     echo ""
     echo "Build artifacts:"
     if [ "$TARGET" = "all" ] || [ "$TARGET" = "engine" ]; then

@@ -51,20 +51,16 @@ class TcpServer {
     void run();
     void shutdown();
 
-    StorageEngine &engine() {
-        return *engine_;
-    }
+    StorageEngine &engine();
 
     // Statistics for monitoring
-    size_t activeConnections() const {
-        return active_connections_.load();
-    }
+    size_t activeConnections() const;
 
   private:
     void acceptLoop();
     void handleClient(int client_fd);
     Response executeCommand(const Request &req);
-    void setSocketTimeout(int fd, int timeout_ms);
+    static void setSocketTimeout(int fd, int timeout_ms);
 
     ServerConfig config_;
     std::unique_ptr<StorageEngine> engine_;

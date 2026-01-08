@@ -60,7 +60,7 @@ class StorageEngine {
   private:
     // Core storage components
     WriteAheadLog wal_;
-    MemTable memtable_;                           
+    MemTable memtable_;
     std::shared_ptr<MemTable> immutable_memtable_; // Immutable memtable being flushed (atomic access)
     VersionManager version_manager_;
     uint64_t flush_counter_;

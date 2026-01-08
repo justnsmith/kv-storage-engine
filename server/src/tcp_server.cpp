@@ -109,6 +109,16 @@ void TcpServer::setSocketTimeout(int fd, int timeout_ms) {
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
+// cppcheck-suppress unusedFunction
+StorageEngine &TcpServer::engine() {
+    return *engine_;
+}
+
+// cppcheck-suppress unusedFunction
+size_t TcpServer::activeConnections() const {
+    return active_connections_.load();
+}
+
 void TcpServer::run() {
     // Create socket
     server_fd_ = socket(AF_INET, SOCK_STREAM, 0);

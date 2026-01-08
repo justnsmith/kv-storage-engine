@@ -45,11 +45,10 @@ int main(int argc, char *argv[]) {
     // If no config specified, search in common locations
     if (configFile.empty()) {
         std::vector<std::string> searchPaths = {"server.yaml", "../server.yaml", "../../server.yaml", "../server/server.yaml"};
-        for (const auto &path : searchPaths) {
-            if (std::filesystem::exists(path)) {
-                configFile = path;
-                break;
-            }
+        auto it =
+            std::find_if(searchPaths.begin(), searchPaths.end(), [](const std::string &path) { return std::filesystem::exists(path); });
+        if (it != searchPaths.end()) {
+            configFile = *it;
         }
     }
 

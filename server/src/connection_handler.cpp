@@ -19,9 +19,7 @@ std::string ProtocolParser::trim(const std::string &s) {
 
 CommandType ProtocolParser::parseCommand(const std::string &cmd) {
     std::string upper = cmd;
-    for (auto &c : upper) {
-        c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
-    }
+    std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
 
     if (upper == "PUT" || upper == "SET")
         return CommandType::PUT;

@@ -1,10 +1,10 @@
 #include "engine.h"
 #include <algorithm>
 #include <chrono>
+#include <iomanip>
 #include <iostream>
 #include <random>
 #include <vector>
-#include <iomanip>
 
 std::string generateRandomString(size_t length) {
     static const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -30,7 +30,7 @@ struct LatencyStats {
     double p999;
 };
 
-LatencyStats calculateStats(std::vector<double>& latencies) {
+LatencyStats calculateStats(std::vector<double> &latencies) {
     std::sort(latencies.begin(), latencies.end());
 
     LatencyStats stats;
@@ -38,7 +38,7 @@ LatencyStats calculateStats(std::vector<double>& latencies) {
     stats.max = latencies.back();
 
     double sum = 0;
-    for (double l : latencies) sum += l;
+    sum = std::accumulate(latencies.begin(), latencies.end(), 0.0);
     stats.mean = sum / latencies.size();
 
     auto percentile = [&](double p) {
@@ -54,7 +54,7 @@ LatencyStats calculateStats(std::vector<double>& latencies) {
     return stats;
 }
 
-void printStats(const std::string& name, const LatencyStats& stats) {
+void printStats(const std::string &name, const LatencyStats &stats) {
     std::cout << name << ":\n";
     std::cout << std::fixed << std::setprecision(3);
     std::cout << "  Min:    " << stats.min << " μs\n";

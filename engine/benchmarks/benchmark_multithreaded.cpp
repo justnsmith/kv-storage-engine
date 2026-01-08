@@ -72,9 +72,7 @@ BenchmarkResult benchmarkConcurrentWrites(StorageEngine &engine, size_t num_thre
     std::sort(all_latencies.begin(), all_latencies.end());
 
     double avg_latency = 0;
-    for (double l : all_latencies) {
-        avg_latency += l;
-    }
+    avg_latency = std::accumulate(all_latencies.begin(), all_latencies.end(), 0.0);
     avg_latency /= all_latencies.size();
 
     double p99_latency = all_latencies[static_cast<size_t>(all_latencies.size() * 0.99)];
@@ -139,9 +137,7 @@ BenchmarkResult benchmarkConcurrentReads(StorageEngine &engine, size_t num_threa
     std::sort(all_latencies.begin(), all_latencies.end());
 
     double avg_latency = 0;
-    for (double l : all_latencies) {
-        avg_latency += l;
-    }
+    avg_latency = std::accumulate(all_latencies.begin(), all_latencies.end(), 0.0);
     avg_latency /= all_latencies.size();
 
     double p99_latency = all_latencies[static_cast<size_t>(all_latencies.size() * 0.99)];
@@ -214,9 +210,8 @@ BenchmarkResult benchmarkMixedWorkload(StorageEngine &engine, size_t num_threads
     std::sort(all_latencies.begin(), all_latencies.end());
 
     double avg_latency = 0;
-    for (double l : all_latencies) {
-        avg_latency += l;
-    }
+
+    avg_latency = std::accumulate(all_latencies.begin(), all_latencies.end(), 0.0);
     avg_latency /= all_latencies.size();
 
     double p99_latency = all_latencies[static_cast<size_t>(all_latencies.size() * 0.99)];
