@@ -1,33 +1,7 @@
 #!/usr/bin/env bash
-set -e
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="$ROOT_DIR/build"
-
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-print_header() {
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-}
-
-print_success() {
-    echo -e "${GREEN}✓${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
-}
-
-print_info() {
-    echo -e "${YELLOW}→${NC} $1"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
 
 show_usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -101,47 +75,21 @@ if [ "$DRY_RUN" = true ]; then
     echo ""
 fi
 
-# Function to safely remove files/directories
-safe_remove() {
-    local path=$1
-    local description=$2
-
-    if [ ! -e "$path" ]; then
-        print_info "$description does not exist, skipping"
-        return
-    fi
-
-    local size=""
-    if [ -d "$path" ]; then
-        size=$(du -sh "$path" 2>/dev/null | cut -f1 || echo "unknown size")
-    elif [ -f "$path" ]; then
-        size=$(du -h "$path" 2>/dev/null | cut -f1 || echo "unknown size")
-    fi
-
-    if [ "$DRY_RUN" = true ]; then
-        print_info "Would remove: $path ($size)"
-    else
-        print_info "Removing $description ($size)"
-        rm -rf "$path"
-        print_success "Removed $description"
-    fi
-}
-
 # Clean build directory
 if [ "$CLEAN_BUILD" = true ]; then
     echo ""
     print_info "Cleaning build artifacts..."
-    safe_remove "$BUILD_DIR" "build directory"
+    safe_remove "$BUILD_DIR" "build directory" "$DRY_RUN"
 fi
 
 # Clean engine data
 if [ "$CLEAN_ENGINE_DATA" = true ]; then
     echo ""
     print_info "Cleaning engine data files..."
-    safe_remove "$ROOT_DIR/engine/data" "engine data directory"
-    safe_remove "$ROOT_DIR/engine/*.wal" "engine WAL files"
-    safe_remove "$ROOT_DIR/engine/*.sst" "engine SSTable files"
-    safe_remove "$ROOT_DIR/engine/*.log" "engine log files"
+    safe_remove "$ROOT_DIR/engine/data" "engine data directory" "$DRY_RUN"
+    safe_remove "$ROOT_DIR/engine/*.wal" "engine WAL files" "$DRY_RUN"
+    safe_remove "$ROOT_DIR/engine/*.sst" "engine SSTable files" "$DRY_RUN"
+    safe_remove "$ROOT_DIR/engine/*.log" "engine log files" "$DRY_RUN"
 
     # Find and clean any data directories in subdirectories
     if [ "$DRY_RUN" = false ]; then
@@ -154,8 +102,8 @@ fi
 if [ "$CLEAN_SERVER_DATA" = true ]; then
     echo ""
     print_info "Cleaning server data files..."
-    safe_remove "$ROOT_DIR/server/data" "server data directory"
-    safe_remove "$ROOT_DIR/server/*.log" "server log files"
+    safe_remove "$ROOT_DIR/server/data" "server data directory" "$DRY_RUN"
+    safe_remove "$ROOT_DIR/server/*.log" "server log files" "$DRY_RUN"
 
     if [ "$DRY_RUN" = false ]; then
         find "$ROOT_DIR/server" -type d -name "data" -exec rm -rf {} + 2>/dev/null || true

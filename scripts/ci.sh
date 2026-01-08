@@ -1,46 +1,7 @@
 #!/usr/bin/env bash
-set -e
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-MAGENTA='\033[0;35m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-print_header() {
-    echo ""
-    echo -e "${MAGENTA}╔════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${MAGENTA}║${NC}  ${CYAN}$1${NC}"
-    echo -e "${MAGENTA}╚════════════════════════════════════════════════════════════════╝${NC}"
-}
-
-print_step() {
-    echo -e "${BLUE}▶${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}✓${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}✗${NC} $1"
-}
-
-print_info() {
-    echo -e "${YELLOW}→${NC} $1"
-}
-
-print_summary_header() {
-    echo ""
-    echo -e "${MAGENTA}╔════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${MAGENTA}║${NC}  ${CYAN}CI SUMMARY${NC}"
-    echo -e "${MAGENTA}╚════════════════════════════════════════════════════════════════╝${NC}"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
 
 show_usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -76,8 +37,8 @@ BUILD_TYPE="Release"
 TARGET="all"
 FAST_MODE=false
 
-for arg in "$@"; do
-    case "$arg" in
+while [ $# -gt 0 ]; do
+    case "$1" in
         --help|-h)
             show_usage
             exit 0
@@ -100,12 +61,10 @@ for arg in "$@"; do
         --build-type)
             shift
             BUILD_TYPE="$1"
-            shift
             ;;
         --target)
             shift
             TARGET="$1"
-            shift
             ;;
         --fast)
             FAST_MODE=true
@@ -113,13 +72,17 @@ for arg in "$@"; do
             SKIP_CHECK=true
             SKIP_FORMAT=true
             ;;
-        -*)
-            print_error "Unknown option: $arg"
+        *)
+            print_error "Unknown option: $1"
             show_usage
             exit 1
             ;;
     esac
+    shift
 done
+
+# Normalize build type
+BUILD_TYPE=$(normalize_build_type "$BUILD_TYPE")
 
 # Track results
 CLEAN_STATUS="⊝ skipped"
@@ -129,9 +92,9 @@ CHECK_STATUS="⊝ skipped"
 FORMAT_STATUS="⊝ skipped"
 OVERALL_STATUS=0
 
-START_TIME=$(date +%s)
+START_TIME=$(start_timer)
 
-print_header "KV Storage - Continuous Integration"
+print_fancy_header "KV Storage - Continuous Integration"
 echo "Target:      $TARGET"
 echo "Build Type:  $BUILD_TYPE"
 if [ "$FAST_MODE" = true ]; then
@@ -141,34 +104,37 @@ echo ""
 
 # Step 1: Clean
 if [ "$SKIP_CLEAN" = false ]; then
-    print_header "Step 1: Clean"
+    print_fancy_header "Step 1: Clean"
     print_step "Cleaning build artifacts..."
-    if "$ROOT_DIR/scripts/clean.sh" --build; then
+    if "$SCRIPT_DIR/clean.sh" --build; then
         CLEAN_STATUS="✓ passed"
         print_success "Clean complete"
     else
         CLEAN_STATUS="✗ failed"
         print_error "Clean failed"
         OVERALL_STATUS=1
-        # Non-fatal, continue anyway
     fi
 else
-    print_header "Step 1: Clean (skipped)"
+    print_fancy_header "Step 1: Clean (skipped)"
 fi
 
 # Step 2: Build
-print_header "Step 2: Build"
+print_fancy_header "Step 2: Build"
 print_step "Building $TARGET ($BUILD_TYPE)..."
-if "$ROOT_DIR/scripts/build.sh" "$TARGET" "$BUILD_TYPE"; then
+if "$SCRIPT_DIR/build.sh" "$TARGET" "$BUILD_TYPE"; then
     BUILD_STATUS="✓ passed"
     print_success "Build complete"
 else
     BUILD_STATUS="✗ failed"
     print_error "Build failed"
     OVERALL_STATUS=1
-    print_summary_header
-    echo "Clean:   $CLEAN_STATUS"
-    echo "Build:   $BUILD_STATUS"
+
+    # Print summary and exit early on build failure
+    print_fancy_header "CI SUMMARY"
+    echo ""
+    echo "Pipeline Results:"
+    echo "  Clean:    $CLEAN_STATUS"
+    echo "  Build:    $BUILD_STATUS"
     echo ""
     print_error "CI pipeline failed at build stage"
     exit 1
@@ -176,9 +142,9 @@ fi
 
 # Step 3: Tests
 if [ "$SKIP_TESTS" = false ]; then
-    print_header "Step 3: Tests"
+    print_fancy_header "Step 3: Tests"
     print_step "Running test suite..."
-    if "$ROOT_DIR/scripts/test.sh"; then
+    if "$SCRIPT_DIR/test.sh"; then
         TEST_STATUS="✓ passed"
         print_success "All tests passed"
     else
@@ -187,14 +153,14 @@ if [ "$SKIP_TESTS" = false ]; then
         OVERALL_STATUS=1
     fi
 else
-    print_header "Step 3: Tests (skipped)"
+    print_fancy_header "Step 3: Tests (skipped)"
 fi
 
 # Step 4: Static Analysis
 if [ "$SKIP_CHECK" = false ]; then
-    print_header "Step 4: Static Analysis"
+    print_fancy_header "Step 4: Static Analysis"
     print_step "Running cppcheck..."
-    if "$ROOT_DIR/scripts/check.sh" "$TARGET"; then
+    if "$SCRIPT_DIR/check.sh" "$TARGET"; then
         CHECK_STATUS="✓ passed"
         print_success "Static analysis passed"
     else
@@ -203,16 +169,16 @@ if [ "$SKIP_CHECK" = false ]; then
         OVERALL_STATUS=1
     fi
 else
-    print_header "Step 4: Static Analysis (skipped)"
+    print_fancy_header "Step 4: Static Analysis (skipped)"
 fi
 
 # Step 5: Format Check
 if [ "$SKIP_FORMAT" = false ]; then
-    print_header "Step 5: Format Check"
+    print_fancy_header "Step 5: Format Check"
 
     if [ "$FIX_FORMAT" = true ]; then
         print_step "Fixing format issues..."
-        if "$ROOT_DIR/scripts/check.sh" "$TARGET" --fix-format; then
+        if "$SCRIPT_DIR/check.sh" "$TARGET" --fix-format; then
             FORMAT_STATUS="✓ fixed"
             print_success "Format issues fixed"
         else
@@ -222,7 +188,7 @@ if [ "$SKIP_FORMAT" = false ]; then
         fi
     else
         print_step "Checking code formatting..."
-        if "$ROOT_DIR/scripts/check.sh" "$TARGET" --format; then
+        if "$SCRIPT_DIR/check.sh" "$TARGET" --format; then
             FORMAT_STATUS="✓ passed"
             print_success "Format check passed"
         else
@@ -232,14 +198,14 @@ if [ "$SKIP_FORMAT" = false ]; then
         fi
     fi
 else
-    print_header "Step 5: Format Check (skipped)"
+    print_fancy_header "Step 5: Format Check (skipped)"
 fi
 
 # Summary
-END_TIME=$(date +%s)
-DURATION=$((END_TIME - START_TIME))
+ELAPSED=$(get_elapsed_time $START_TIME)
+DURATION=$(format_duration $ELAPSED)
 
-print_summary_header
+print_fancy_header "CI SUMMARY"
 echo ""
 echo "Pipeline Results:"
 echo "  Clean:    $CLEAN_STATUS"
@@ -248,7 +214,7 @@ echo "  Tests:    $TEST_STATUS"
 echo "  Check:    $CHECK_STATUS"
 echo "  Format:   $FORMAT_STATUS"
 echo ""
-echo "Duration: ${DURATION}s"
+echo "Duration: $DURATION"
 echo ""
 
 if [ $OVERALL_STATUS -eq 0 ]; then
@@ -256,10 +222,10 @@ if [ $OVERALL_STATUS -eq 0 ]; then
     echo ""
     echo "Build artifacts:"
     if [ "$TARGET" = "all" ] || [ "$TARGET" = "engine" ]; then
-        echo "  Engine: $ROOT_DIR/build/engine/kv_engine"
+        echo "  Engine: $(get_executable_path engine)"
     fi
     if [ "$TARGET" = "all" ] || [ "$TARGET" = "server" ]; then
-        echo "  Server: $ROOT_DIR/build/server/kv_server"
+        echo "  Server: $(get_executable_path server)"
     fi
 else
     print_error "CI pipeline failed"

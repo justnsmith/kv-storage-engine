@@ -1,32 +1,7 @@
 #!/usr/bin/env bash
-set -e
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-print_header() {
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-}
-
-print_success() {
-    echo -e "${GREEN}✓${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}✗${NC} $1"
-}
-
-print_info() {
-    echo -e "${YELLOW}→${NC} $1"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
 
 show_usage() {
     echo "Usage: $0 [OPTIONS] [TARGET]"
@@ -87,10 +62,8 @@ for arg in "$@"; do
 done
 
 # Check if cppcheck is available
-if ! command -v cppcheck &> /dev/null; then
-    print_error "cppcheck not found. Install it first:"
-    echo "  macOS:  brew install cppcheck"
-    echo "  Ubuntu: sudo apt-get install cppcheck"
+if ! require_command cppcheck "  macOS:  brew install cppcheck
+  Ubuntu: sudo apt-get install cppcheck"; then
     exit 1
 fi
 
@@ -165,10 +138,8 @@ if [ "$FIX_FORMAT" = true ] || [ "$CHECK_FORMAT" = true ]; then
     echo ""
     print_header "Format Check - clang-format"
 
-    if ! command -v clang-format &> /dev/null; then
-        print_error "clang-format not found. Install it first:"
-        echo "  macOS:  brew install clang-format"
-        echo "  Ubuntu: sudo apt-get install clang-format"
+    if ! require_command clang-format "  macOS:  brew install clang-format
+  Ubuntu: sudo apt-get install clang-format"; then
         exit 1
     fi
 

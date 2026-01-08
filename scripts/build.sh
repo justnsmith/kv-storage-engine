@@ -1,60 +1,12 @@
 #!/usr/bin/env bash
-set -e
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="$ROOT_DIR/build"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
 
 # Default values
 TARGET="${1:-all}"
 BUILD_TYPE="${2:-Release}"
-JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-print_header() {
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-}
-
-print_success() {
-    echo -e "${GREEN}✓${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}✗${NC} $1"
-}
-
-print_info() {
-    echo -e "${YELLOW}→${NC} $1"
-}
-
-cmake_configure() {
-    local name=$1
-    local src=$2
-    local out="$BUILD_DIR/$name"
-
-    print_info "Configuring $name ($BUILD_TYPE)"
-    if cmake -S "$src" -B "$out" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON; then
-        print_success "Configuration complete for $name"
-    else
-        print_error "Configuration failed for $name"
-        return 1
-    fi
-
-    print_info "Building $name with $JOBS parallel jobs"
-    if cmake --build "$out" -j"$JOBS"; then
-        print_success "Build complete for $name"
-    else
-        print_error "Build failed for $name"
-        return 1
-    fi
-}
+JOBS=$(get_cpu_count)
 
 show_usage() {
     echo "Usage: $0 [TARGET] [BUILD_TYPE] [OPTIONS]"
@@ -112,6 +64,9 @@ fi
 # Create build directory
 mkdir -p "$BUILD_DIR"
 
+# Normalize build type
+BUILD_TYPE=$(normalize_build_type "$BUILD_TYPE")
+
 print_header "KV Storage Build System"
 echo "Root Dir:    $ROOT_DIR"
 echo "Build Dir:   $BUILD_DIR"
@@ -123,38 +78,38 @@ echo ""
 case "$TARGET" in
     engine)
         print_header "Building Engine"
-        cmake_configure engine "$ROOT_DIR/engine"
+        cmake_configure_and_build engine "$ROOT_DIR/engine" "$BUILD_TYPE" "$JOBS"
         print_success "Engine built successfully!"
         echo ""
         echo "Executables:"
-        echo "  CLI:    $BUILD_DIR/engine/kv_engine"
-        echo "  Tests:  $BUILD_DIR/engine/kv_engine_tests"
+        echo "  CLI:    $(get_executable_path engine)"
+        echo "  Tests:  $(get_executable_path tests)"
         ;;
     server)
         print_header "Building Server"
-        cmake_configure server "$ROOT_DIR/server"
+        cmake_configure_and_build server "$ROOT_DIR/server" "$BUILD_TYPE" "$JOBS"
         print_success "Server built successfully!"
         echo ""
         echo "Executables:"
-        echo "  Server: $BUILD_DIR/server/kv_server"
+        echo "  Server: $(get_executable_path server)"
         ;;
     all)
         print_header "Building Engine"
-        cmake_configure engine "$ROOT_DIR/engine"
+        cmake_configure_and_build engine "$ROOT_DIR/engine" "$BUILD_TYPE" "$JOBS"
         echo ""
         print_header "Building Server"
-        cmake_configure server "$ROOT_DIR/server"
+        cmake_configure_and_build server "$ROOT_DIR/server" "$BUILD_TYPE" "$JOBS"
         echo ""
         print_success "All components built successfully!"
         echo ""
         echo "Executables:"
-        echo "  Engine: $BUILD_DIR/engine/kv_engine"
-        echo "  Server: $BUILD_DIR/server/kv_server"
-        echo "  Tests:  $BUILD_DIR/engine/kv_engine_tests"
+        echo "  Engine: $(get_executable_path engine)"
+        echo "  Server: $(get_executable_path server)"
+        echo "  Tests:  $(get_executable_path tests)"
         ;;
     tests)
         print_header "Building and Running Tests"
-        cmake_configure engine "$ROOT_DIR/engine"
+        cmake_configure_and_build engine "$ROOT_DIR/engine" "$BUILD_TYPE" "$JOBS"
         echo ""
         print_info "Running tests..."
         if (cd "$BUILD_DIR/engine" && ctest --output-on-failure); then
@@ -166,7 +121,7 @@ case "$TARGET" in
         ;;
     benchmarks|bench)
         print_header "Building Benchmarks"
-        cmake_configure engine "$ROOT_DIR/engine"
+        cmake_configure_and_build engine "$ROOT_DIR/engine" "$BUILD_TYPE" "$JOBS"
         echo ""
         print_info "Building benchmark targets..."
         if cmake --build "$BUILD_DIR/engine" --target engine_bench -j"$JOBS"; then
