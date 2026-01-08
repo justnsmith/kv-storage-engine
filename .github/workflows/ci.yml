@@ -7,56 +7,32 @@ on:
     branches: [ main ]
 
 jobs:
-  lint:
-    name: Cppcheck (engine)
+  ci:
+    name: Build, Test & Lint
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install LLVM/Clang 21
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main"
+          sudo apt-get update
+
       - name: Install dependencies
         run: |
-          sudo apt-get update
           sudo apt-get install -y \
             cmake \
             g++ \
             cppcheck \
+            clang-format-21 \
             zlib1g-dev
+          # Make clang-format-21 the default
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-21 100
 
-      - name: Configure engine (CMake)
-        working-directory: engine
-        run: cmake -S . -B build
+      - name: Verify clang-format version
+        run: clang-format --version
 
-      - name: Run cppcheck
-        working-directory: engine
-        run: cmake --build build --target check
-
-  tests:
-    name: Build & Test (engine)
-    runs-on: ubuntu-latest
-    needs: lint
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            cmake \
-            g++ \
-            zlib1g-dev
-
-      - name: Configure engine (CMake)
-        working-directory: engine
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build engine
-        working-directory: engine
-        run: cmake --build build -j$(nproc)
-
-      - name: Run tests (CTest)
-        working-directory: engine
-        run: ctest --test-dir build --output-on-failure
+      - name: Run CI script
+        run: ./scripts/ci.sh --skip-format

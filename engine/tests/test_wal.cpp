@@ -110,7 +110,7 @@ bool test_corruption_stops_replay(WriteAheadLogTest &fixture) {
 
     // Seek past checksum (4 bytes) to corrupt the sequence number or Op
     file.seekp(4);
-    char corrupt = 0xFF;
+    char corrupt = static_cast<char>(0xFF);
     file.write(&corrupt, 1);
     file.close();
 
