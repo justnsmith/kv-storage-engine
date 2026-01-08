@@ -1,18 +1,18 @@
 #include "protocol.h"
 
-kv::Response ok(const std::string&msg) {
+kv::Response kv::Response::ok(const std::string& msg) {
     return {true, msg, std::nullopt};
 }
 
-kv::Response okWithValue(const std::string&value) {
+kv::Response kv::Response::okWithValue(const std::string& value) {
     return {true, "OK", value};
 }
 
-kv::Response notFound() {
+kv::Response kv::Response::notFound() {
     return {false, "NOT_FOUND", std::nullopt};
 }
 
-kv::Response error(const std::string&msg) {
+kv::Response kv::Response::error(const std::string& msg) {
     return {false, msg, std::nullopt};
 }
 
