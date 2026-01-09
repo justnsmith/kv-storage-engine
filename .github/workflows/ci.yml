@@ -1,4 +1,4 @@
-name: C++ CI
+name: C++ & Go CI
 
 on:
   push:
@@ -27,12 +27,29 @@ jobs:
             g++ \
             cppcheck \
             clang-format-21 \
-            zlib1g-dev
+            zlib1g-dev \
+            curl \
+            git
           # Make clang-format-21 the default
           sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-21 100
 
       - name: Verify clang-format version
         run: clang-format --version
 
-      - name: Run CI script
+      - name: Install Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.5'
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s latest
+          sudo mv ./bin/golangci-lint /usr/local/bin/
+
+      - name: Run C++ CI script
         run: ./scripts/ci.sh --skip-format
+
+      - name: Run Go linter
+        run: |
+          cd cli
+          golangci-lint run ./...
