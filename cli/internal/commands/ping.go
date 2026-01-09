@@ -31,7 +31,7 @@ Examples:
 			formatter.PrintError(fmt.Sprintf("failed to connect: %v", err))
 			os.Exit(1)
 		}
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 
 		// Execute PING
 		resp, err := c.Ping()

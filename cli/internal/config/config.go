@@ -70,11 +70,11 @@ func Load() (*Config, error) {
 	v.AutomaticEnv()
 
 	// Manual environment variable binding for nested config
-	v.BindEnv("server.host", "KV_HOST", "KV_SERVER_HOST")
-	v.BindEnv("server.port", "KV_PORT", "KV_SERVER_PORT")
-	v.BindEnv("server.timeout_ms", "KV_TIMEOUT_MS", "KV_SERVER_TIMEOUT_MS")
-	v.BindEnv("output.format", "KV_FORMAT", "KV_OUTPUT_FORMAT")
-	v.BindEnv("output.color", "KV_COLOR", "KV_OUTPUT_COLOR")
+	_ = v.BindEnv("server.host", "KV_HOST", "KV_SERVER_HOST")
+	_ = v.BindEnv("server.port", "KV_PORT", "KV_SERVER_PORT")
+	_ = v.BindEnv("server.timeout_ms", "KV_TIMEOUT_MS", "KV_SERVER_TIMEOUT_MS")
+	_ = v.BindEnv("output.format", "KV_FORMAT", "KV_OUTPUT_FORMAT")
+	_ = v.BindEnv("output.color", "KV_COLOR", "KV_OUTPUT_COLOR")
 
 	// Unmarshal into struct
 	cfg := &Config{}

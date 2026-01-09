@@ -38,7 +38,7 @@ func (c *Client) Connect() error {
 
 	// Set read/write deadlines
 	if err := c.conn.SetDeadline(time.Now().Add(c.Timeout)); err != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 		return fmt.Errorf("failed to set deadline: %w", err)
 	}
 
@@ -46,12 +46,12 @@ func (c *Client) Connect() error {
 	reader := bufio.NewReader(c.conn)
 	welcome, err := reader.ReadString('\n')
 	if err != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 		return fmt.Errorf("failed to read welcome message: %w", err)
 	}
 
 	if !strings.HasPrefix(welcome, "+OK") {
-		c.conn.Close()
+		_ = c.conn.Close()
 		return fmt.Errorf("unexpected welcome message: %s", welcome)
 	}
 
