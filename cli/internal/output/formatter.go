@@ -147,3 +147,27 @@ func (f *Formatter) printJSON(data interface{}) {
 	}
 	fmt.Println(string(b))
 }
+
+// PrintStatus formats and prints server status information
+func (f *Formatter) PrintStatus(data string) {
+	if f.Format == "json" {
+		// For JSON, try to parse status as structured data
+		// For now, just wrap in a success response
+		f.printJSON(map[string]interface{}{
+			"success": true,
+			"status":  data,
+		})
+		return
+	}
+
+	// Text format - pretty print
+	if f.ColorEnabled {
+		color.Cyan("Server Status:")
+		fmt.Println("---------------------")
+	} else {
+		fmt.Println("Server Status:")
+		fmt.Println("---------------------")
+	}
+
+	fmt.Println(data)
+}

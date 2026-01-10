@@ -75,4 +75,5 @@ const (
 	CommandDelete = "DELETE"
 	CommandPing   = "PING"
 	CommandQuit   = "QUIT"
+	CommandStatus = "STATUS"
 )

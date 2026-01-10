@@ -117,3 +117,8 @@ func (c *Client) Ping() (*Response, error) {
 func (c *Client) Quit() (*Response, error) {
 	return c.sendCommand(CommandQuit)
 }
+
+// Status retrieves server status and replication info
+func (c *Client) Status() (*Response, error) {
+	return c.sendCommand(CommandStatus)
+}

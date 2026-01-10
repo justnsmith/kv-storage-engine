@@ -87,4 +87,5 @@ func init() {
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(pingCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(statusCmd)
 }
