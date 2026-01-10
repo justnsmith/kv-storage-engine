@@ -9,7 +9,7 @@ import (
 
 // Formatter handles output formatting
 type Formatter struct {
-	Format     string // "text" or "json"
+	Format       string // "text" or "json"
 	ColorEnabled bool
 }
 
