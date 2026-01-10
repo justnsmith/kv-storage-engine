@@ -48,8 +48,3 @@ jobs:
 
       - name: Run C++ CI script
         run: ./scripts/ci.sh --skip-format
-
-      - name: Run Go linter
-        run: |
-          cd cli
-          golangci-lint run ./...

@@ -8,17 +8,19 @@ show_usage() {
     echo ""
     echo "Options:"
     echo "  --help, -h       Show this help message"
-    echo "  --all, -a        Clean build dir, engine data, and server data"
+    echo "  --all, -a        Clean build dir, engine data, server data, and CLI binaries"
     echo "  --data, -d       Clean only engine and server data files"
     echo "  --build, -b      Clean only build directory (default)"
     echo "  --engine         Clean only engine data files"
     echo "  --server         Clean only server data files"
+    echo "  --cli            Clean only Go CLI binaries"
     echo "  --dry-run, -n    Show what would be deleted without deleting"
     echo ""
     echo "Examples:"
     echo "  $0                # Clean build directory"
     echo "  $0 --all          # Clean everything"
     echo "  $0 --data         # Clean data files only"
+    echo "  $0 --cli          # Clean CLI binaries only"
     echo "  $0 --dry-run      # Preview what will be cleaned"
 }
 
@@ -26,6 +28,7 @@ show_usage() {
 CLEAN_BUILD=false
 CLEAN_ENGINE_DATA=false
 CLEAN_SERVER_DATA=false
+CLEAN_CLI=false
 DRY_RUN=false
 
 # Parse arguments
@@ -43,6 +46,7 @@ for arg in "$@"; do
             CLEAN_BUILD=true
             CLEAN_ENGINE_DATA=true
             CLEAN_SERVER_DATA=true
+            CLEAN_CLI=true
             ;;
         --data|-d)
             CLEAN_ENGINE_DATA=true
@@ -56,6 +60,9 @@ for arg in "$@"; do
             ;;
         --server)
             CLEAN_SERVER_DATA=true
+            ;;
+        --cli)
+            CLEAN_CLI=true
             ;;
         --dry-run|-n)
             DRY_RUN=true
@@ -82,6 +89,24 @@ if [ "$CLEAN_BUILD" = true ]; then
     safe_remove "$BUILD_DIR" "build directory" "$DRY_RUN"
 fi
 
+# Clean Go CLI binaries
+if [ "$CLEAN_CLI" = true ]; then
+    echo ""
+    print_info "Cleaning Go CLI binaries..."
+    safe_remove "$ROOT_DIR/cli/bin" "CLI bin directory" "$DRY_RUN"
+    safe_remove "$ROOT_DIR/cli/kvstore-cli" "CLI binary (if in root)" "$DRY_RUN"
+
+    # Clean Go build cache and test cache (optional, but thorough)
+    if [ "$DRY_RUN" = false ]; then
+        if command -v go &> /dev/null; then
+            print_info "Cleaning Go build cache..."
+            (cd "$ROOT_DIR/cli" && go clean -cache -testcache 2>/dev/null) || true
+        fi
+    else
+        echo "  Would clean Go build cache"
+    fi
+fi
+
 # Clean engine data
 if [ "$CLEAN_ENGINE_DATA" = true ]; then
     echo ""
@@ -104,7 +129,7 @@ if [ "$CLEAN_SERVER_DATA" = true ]; then
     print_info "Cleaning server data files..."
     safe_remove "$ROOT_DIR/server/data" "server data directory" "$DRY_RUN"
     safe_remove "$ROOT_DIR/server/*.log" "server log files" "$DRY_RUN"
-
+   
     if [ "$DRY_RUN" = false ]; then
         find "$ROOT_DIR/server" -type d -name "data" -exec rm -rf {} + 2>/dev/null || true
         find "$ROOT_DIR/server" -type f -name "*.log" -delete 2>/dev/null || true
