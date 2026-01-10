@@ -13,7 +13,8 @@ show_usage() {
     echo ""
     echo "Targets:"
     echo "  engine       Build only the engine library and CLI"
-    echo "  server       Build only the server (depends on engine)"
+    echo "  distributed  Build only the distributed replication layer"
+    echo "  server       Build only the server (depends on engine + distributed)"
     echo "  cli          Build only the Go CLI"
     echo "  all          Build everything (default)"
     echo "  tests        Build and run engine tests"
@@ -107,6 +108,39 @@ build_go_cli() {
     fi
 }
 
+# Function to configure and build using root CMake
+build_from_root() {
+    local target=$1
+
+    print_info "Configuring from root ($BUILD_TYPE)"
+    if cmake -S "$ROOT_DIR" -B "$BUILD_DIR" \
+        -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON; then
+        print_success "Configuration complete"
+    else
+        print_error "Configuration failed"
+        return 1
+    fi
+
+    if [ "$target" = "all" ]; then
+        print_info "Building all targets with $JOBS parallel jobs"
+        if cmake --build "$BUILD_DIR" -j"$JOBS"; then
+            print_success "Build complete"
+        else
+            print_error "Build failed"
+            return 1
+        fi
+    else
+        print_info "Building $target with $JOBS parallel jobs"
+        if cmake --build "$BUILD_DIR" --target "kv_$target" -j"$JOBS"; then
+            print_success "Build complete for $target"
+        else
+            print_error "Build failed for $target"
+            return 1
+        fi
+    fi
+}
+
 print_header "KV Storage Build System"
 echo "Root Dir:    $ROOT_DIR"
 echo "Build Dir:   $BUILD_DIR"
@@ -118,44 +152,58 @@ echo ""
 case "$TARGET" in
     engine)
         print_header "Building Engine"
-        cmake_configure_and_build engine "$ROOT_DIR/engine" "$BUILD_TYPE" "$JOBS"
+        build_from_root engine_core
         print_success "Engine built successfully!"
         echo ""
         echo "Executables:"
-        echo "  CLI:    $(get_executable_path engine)"
-        echo "  Tests:  $(get_executable_path tests)"
+        echo "  CLI:    $BUILD_DIR/engine/kv_engine"
+        echo "  Tests:  $BUILD_DIR/engine/kv_engine_tests"
         ;;
+
+    distributed)
+        print_header "Building Distributed Layer"
+        build_from_root distributed
+        print_success "Distributed layer built successfully!"
+        echo ""
+        echo "Library:"
+        echo "  $BUILD_DIR/distributed/libkv_distributed.a"
+        ;;
+
     server)
         print_header "Building Server"
-        cmake_configure_and_build server "$ROOT_DIR/server" "$BUILD_TYPE" "$JOBS"
+        build_from_root server
         print_success "Server built successfully!"
         echo ""
         echo "Executables:"
-        echo "  Server: $(get_executable_path server)"
+        echo "  Server: $BUILD_DIR/server/kv_server"
         ;;
+
     cli)
         build_go_cli
         ;;
+
     all)
-        print_header "Building Engine"
-        cmake_configure_and_build engine "$ROOT_DIR/engine" "$BUILD_TYPE" "$JOBS"
-        echo ""
-        print_header "Building Server"
-        cmake_configure_and_build server "$ROOT_DIR/server" "$BUILD_TYPE" "$JOBS"
+        print_header "Building All Components"
+        build_from_root all
         echo ""
         build_go_cli
         echo ""
         print_success "All components built successfully!"
         echo ""
         echo "Executables:"
-        echo "  Engine: $(get_executable_path engine)"
-        echo "  Server: $(get_executable_path server)"
-        echo "  Tests:  $(get_executable_path tests)"
-        echo "  Go CLI: $ROOT_DIR/cli/bin/kvstore-cli"
+        echo "  Engine:      $BUILD_DIR/engine/kv_engine"
+        echo "  Server:      $BUILD_DIR/server/kv_server"
+        echo "  Tests:       $BUILD_DIR/engine/kv_engine_tests"
+        echo "  Go CLI:      $ROOT_DIR/cli/bin/kvstore-cli"
+        echo ""
+        echo "Libraries:"
+        echo "  Engine:      $BUILD_DIR/engine/libkv_engine_core.a"
+        echo "  Distributed: $BUILD_DIR/distributed/libkv_distributed.a"
         ;;
+
     tests)
         print_header "Building and Running Tests"
-        cmake_configure_and_build engine "$ROOT_DIR/engine" "$BUILD_TYPE" "$JOBS"
+        build_from_root engine_core
         echo ""
         print_info "Running tests..."
         if (cd "$BUILD_DIR/engine" && ctest --output-on-failure); then
@@ -165,9 +213,10 @@ case "$TARGET" in
             exit 1
         fi
         ;;
+
     benchmarks|bench)
         print_header "Building Benchmarks"
-        cmake_configure_and_build engine "$ROOT_DIR/engine" "$BUILD_TYPE" "$JOBS"
+        build_from_root engine_core
         echo ""
         print_info "Building benchmark targets..."
         if cmake --build "$BUILD_DIR/engine" --target engine_bench -j"$JOBS"; then
@@ -180,6 +229,7 @@ case "$TARGET" in
             exit 1
         fi
         ;;
+
     *)
         print_error "Unknown target: $TARGET"
         echo ""
