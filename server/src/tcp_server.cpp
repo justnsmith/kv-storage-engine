@@ -1,5 +1,8 @@
 #include "tcp_server.h"
 #include "connection_handler.h"
+#include "follower.h"
+#include "leader.h"
+#include "replication_types.h"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -41,7 +44,7 @@ void ThreadPool::shutdown() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (shutdown_.exchange(true)) {
-            return; // Already shutdown
+            return;
         }
     }
     cv_.notify_all();
@@ -89,11 +92,47 @@ void ThreadPool::workerLoop() {
 
 TcpServer::TcpServer(const ServerConfig &config) : config_(config), thread_pool_(std::make_unique<ThreadPool>(config.num_threads)) {
 
-    // Initialize the storage engine
+    // Initialize storage engine
     std::string wal_path = config_.data_dir + "/wal.log";
     engine_ = std::make_unique<StorageEngine>(wal_path, config_.cache_size);
-
     std::cout << "[Server] Storage engine initialized" << std::endl;
+
+    // Initialize distributed layer if configured
+    if (config_.node_id > 0 && !config_.role.empty()) {
+        distributed::ReplicationConfig repl_config;
+        repl_config.node_id = config_.node_id;
+        repl_config.host = config_.host;
+        repl_config.replication_port = config_.port + 100;
+
+        // Build peer list
+        for (const auto &[host, port] : config_.peers) {
+            distributed::PeerInfo peer;
+            peer.host = host;
+            peer.port = port + 100; // Replication port
+            peer.socket_fd = -1;
+            peer.connected = false;
+            repl_config.peers.push_back(peer);
+        }
+
+        if (config_.role == "leader") {
+            repl_config.role = distributed::NodeRole::LEADER;
+            leader_ = std::make_unique<distributed::Leader>(repl_config);
+
+            leader_->setApplyCallback([this](const distributed::LogEntry &entry) { applyLogEntry(entry); });
+
+            std::cout << "[Server] Initialized as LEADER" << std::endl;
+
+        } else if (config_.role == "follower") {
+            repl_config.role = distributed::NodeRole::FOLLOWER;
+            follower_ = std::make_unique<distributed::Follower>(repl_config);
+
+            follower_->setApplyCallback([this](const distributed::LogEntry &entry) { applyLogEntry(entry); });
+
+            std::cout << "[Server] Initialized as FOLLOWER" << std::endl;
+        }
+    } else {
+        std::cout << "[Server] Running in standalone mode" << std::endl;
+    }
 }
 
 TcpServer::~TcpServer() {
@@ -109,34 +148,29 @@ void TcpServer::setSocketTimeout(int fd, int timeout_ms) {
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
-// cppcheck-suppress unusedFunction
 StorageEngine &TcpServer::engine() {
     return *engine_;
 }
 
-// cppcheck-suppress unusedFunction
 size_t TcpServer::activeConnections() const {
     return active_connections_.load();
 }
 
 void TcpServer::run() {
-    // Create socket
+    // Create client socket
     server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd_ < 0) {
         throw std::runtime_error("Failed to create socket: " + std::string(strerror(errno)));
     }
 
-    // Allow address reuse
     int opt = 1;
     if (setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         close(server_fd_);
         throw std::runtime_error("Failed to set SO_REUSEADDR: " + std::string(strerror(errno)));
     }
 
-    // Set socket timeout for graceful shutdown
     setSocketTimeout(server_fd_, config_.accept_timeout_ms);
 
-    // Bind
     struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(config_.port);
@@ -151,16 +185,23 @@ void TcpServer::run() {
         throw std::runtime_error("Failed to bind: " + std::string(strerror(errno)));
     }
 
-    // Listen
     if (listen(server_fd_, SOMAXCONN) < 0) {
         close(server_fd_);
         throw std::runtime_error("Failed to listen: " + std::string(strerror(errno)));
     }
 
     running_.store(true);
+
     std::cout << "[Server] Listening on " << config_.host << ":" << config_.port << std::endl;
-    std::cout << "[Server] Thread pool size: " << config_.num_threads << std::endl;
-    std::cout << "[Server] Max connections: " << config_.max_connections << std::endl;
+
+    // Start distributed layer
+    if (leader_) {
+        leader_->start();
+    }
+    if (follower_) {
+        follower_->start();
+    }
+
     std::cout << "[Server] Ready to accept connections" << std::endl;
 
     acceptLoop();
@@ -168,33 +209,27 @@ void TcpServer::run() {
 
 void TcpServer::shutdown() {
     if (!running_.exchange(false)) {
-        return; // Already shutdown
+        return;
     }
 
     std::cout << "[Server] Shutting down..." << std::endl;
 
-    // Close server socket to unblock accept()
+    // Stop distributed layer
+    if (leader_) {
+        leader_->stop();
+    }
+    if (follower_) {
+        follower_->stop();
+    }
+
     if (server_fd_ >= 0) {
         ::shutdown(server_fd_, SHUT_RDWR);
         close(server_fd_);
         server_fd_ = -1;
     }
 
-    // Shutdown thread pool
     if (thread_pool_) {
-        std::cout << "[Server] Waiting for " << thread_pool_->queueSize() << " pending tasks..." << std::endl;
         thread_pool_->shutdown();
-    }
-
-    // Wait for active connections to finish (with timeout)
-    int wait_count = 0;
-    while (active_connections_.load() > 0 && wait_count < 50) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        wait_count++;
-    }
-
-    if (active_connections_.load() > 0) {
-        std::cout << "[Server] " << active_connections_.load() << " connections still active after timeout" << std::endl;
     }
 
     std::cout << "[Server] Shutdown complete" << std::endl;
@@ -208,35 +243,23 @@ void TcpServer::acceptLoop() {
         int client_fd = accept(server_fd_, reinterpret_cast<struct sockaddr *>(&client_addr), &client_len);
 
         if (client_fd < 0) {
-            if (!running_.load()) {
-                // Shutdown in progress
+            if (!running_.load())
                 break;
-            }
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-                // Timeout or interrupted, continue
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
                 continue;
-            }
             std::cerr << "[Server] Accept failed: " << strerror(errno) << std::endl;
             continue;
         }
 
-        // Check connection limit
         if (active_connections_.load() >= config_.max_connections) {
-            std::cerr << "[Server] Connection limit reached, rejecting connection" << std::endl;
+            std::cerr << "[Server] Connection limit reached" << std::endl;
             close(client_fd);
             continue;
         }
 
-        char client_ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
-        std::cout << "[Server] New connection from " << client_ip << ":" << ntohs(client_addr.sin_port) << std::endl;
-
-        // Set timeouts on client socket
-        setSocketTimeout(client_fd, 30000); // 30 second timeout
-
+        setSocketTimeout(client_fd, 30000);
         active_connections_++;
 
-        // Handle client in thread pool
         thread_pool_->submit([this, client_fd]() {
             try {
                 handleClient(client_fd);
@@ -251,13 +274,32 @@ void TcpServer::acceptLoop() {
 
 void TcpServer::handleClient(int client_fd) {
     auto executor = [this](const Request &req) { return executeCommand(req); };
-
     ConnectionHandler handler(client_fd, executor);
     handler.run();
 }
 
 Response TcpServer::executeCommand(const Request &req) {
     try {
+        if (follower_ && (req.type == CommandType::PUT || req.type == CommandType::DELETE)) {
+            return Response::error("NOT_LEADER - Write to leader at " + std::to_string(config_.node_id == 2 ? 9000 : 9000));
+        }
+        // If we're a leader, replicate writes
+        if (leader_) {
+            if (req.type == CommandType::PUT || req.type == CommandType::DELETE) {
+                distributed::LogEntry entry;
+                entry.term = 0;  // Will be set by leader
+                entry.index = 0; // Will be set by leader
+                entry.op = (req.type == CommandType::PUT) ? distributed::ReplicationOp::PUT : distributed::ReplicationOp::DELETE;
+                entry.key = req.key;
+                entry.value = req.value;
+
+                if (!leader_->replicate(entry)) {
+                    std::cerr << "[Server] Warning: Replication failed" << std::endl;
+                }
+            }
+        }
+
+        // Execute locally
         switch (req.type) {
         case CommandType::PUT: {
             bool success = engine_->put(req.key, req.value);
@@ -284,12 +326,50 @@ Response TcpServer::executeCommand(const Request &req) {
         case CommandType::QUIT:
             return Response::ok("BYE");
 
+        case CommandType::STATUS: {
+            std::string status = "Node ID: " + std::to_string(config_.node_id) + "\n";
+
+            if (leader_) {
+                status += "Role: LEADER\n";
+                status += "Term: " + std::to_string(leader_->getCurrentTerm()) + "\n";
+                status += "Commit Index: " + std::to_string(leader_->getCommitIndex()) + "\n";
+            } else if (follower_) {
+                status += "Role: FOLLOWER\n";
+                status += "Term: " + std::to_string(follower_->getCurrentTerm()) + "\n";
+                status += "Commit Index: " + std::to_string(follower_->getCommitIndex()) + "\n";
+            } else {
+                status += "Role: STANDALONE\n";
+            }
+
+            status += "Active Connections: " + std::to_string(active_connections_.load());
+
+            return Response::okWithValue(status);
+        }
+
         default:
             return Response::error("UNKNOWN_COMMAND");
         }
     } catch (const std::exception &e) {
-        std::cerr << "[Server] Command execution error: " << e.what() << std::endl;
+        std::cerr << "[Server] Command error: " << e.what() << std::endl;
         return Response::error("INTERNAL_ERROR");
+    }
+}
+
+void TcpServer::applyLogEntry(const distributed::LogEntry &entry) {
+    std::cout << "[Server] Applying entry index=" << entry.index << std::endl;
+
+    try {
+        switch (entry.op) {
+        case distributed::ReplicationOp::PUT:
+            engine_->put(entry.key, entry.value);
+            break;
+
+        case distributed::ReplicationOp::DELETE:
+            engine_->del(entry.key);
+            break;
+        }
+    } catch (const std::exception &e) {
+        std::cerr << "[Server] Failed to apply: " << e.what() << std::endl;
     }
 }
 

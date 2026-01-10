@@ -7,11 +7,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_compile_options(-Wall -Wextra -Wpedantic)
 
-# Point CMake at engine build
+# Dependencies
 find_package(ZLIB REQUIRED)
 
-add_subdirectory(../engine engine_build)
-
+# Server executable
 add_executable(kv_server
     src/main.cpp
     src/tcp_server.cpp
@@ -20,9 +19,19 @@ add_executable(kv_server
     src/config_parser.cpp
 )
 
-target_include_directories(kv_server PRIVATE include)
-target_link_libraries(kv_server PRIVATE kv::engine ZLIB::ZLIB)
+target_include_directories(kv_server
+    PRIVATE
+        include
+)
 
+target_link_libraries(kv_server
+    PRIVATE
+        kv::engine
+        kv::distributed
+        ZLIB::ZLIB
+)
+
+# Convenience target
 add_custom_target(run
     COMMAND kv_server
     DEPENDS kv_server

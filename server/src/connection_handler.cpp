@@ -84,7 +84,7 @@ std::optional<Request> ProtocolParser::parse(const std::string &line) {
 
     case CommandType::PING:
     case CommandType::QUIT:
-        // No arguments needed
+    case CommandType::STATUS:
         break;
 
     case CommandType::UNKNOWN:

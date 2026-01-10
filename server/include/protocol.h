@@ -7,7 +7,7 @@
 
 namespace kv {
 
-enum class CommandType { PUT, GET, DELETE, PING, QUIT, UNKNOWN };
+enum class CommandType { PUT, GET, DELETE, PING, QUIT, STATUS, UNKNOWN };
 
 struct Request {
     CommandType type;

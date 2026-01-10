@@ -1,8 +1,6 @@
 #ifndef CONFIG_PARSER_H
 #define CONFIG_PARSER_H
-
 #include "tcp_server.h"
-
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -12,7 +10,7 @@
 
 namespace kv {
 
-// Simple YAML-like config parser (handles basic key: value format)
+// Simple YAML-like config parser (handles basic key: value format and lists)
 class ConfigParser {
   public:
     static std::optional<ServerConfig> load(const std::string &filepath);
@@ -22,5 +20,4 @@ class ConfigParser {
 };
 
 } // namespace kv
-
 #endif

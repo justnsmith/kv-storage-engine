@@ -21,11 +21,13 @@ void printUsage(const char *prog) {
     std::cout << "Usage: " << prog << " [options]\n"
               << "Options:\n"
               << "  -f, --config FILE    Config file path (default: server.yaml)\n"
-              << "  -p, --port PORT      Port to listen on (default: 6379)\n"
-              << "  -h, --host HOST      Host to bind to (default: 0.0.0.0)\n"
+              << "  -p, --port PORT      Port to listen on (default: 9000)\n"
+              << "  -h, --host HOST      Host to bind to (default: 127.0.0.1)\n"
               << "  -t, --threads NUM    Number of worker threads (default: 4)\n"
               << "  -c, --cache SIZE     LRU cache size (default: 1000)\n"
               << "  -d, --data DIR       Data directory (default: data)\n"
+              << "  --node-id ID         Node ID for replication\n"
+              << "  --role ROLE          Node role: leader or follower\n"
               << "  --help               Show this help message\n"
               << "\nConfig file (server.yaml) is loaded first, then CLI args override.\n"
               << std::endl;
@@ -83,6 +85,10 @@ int main(int argc, char *argv[]) {
             config.cache_size = static_cast<size_t>(std::stoi(argv[++i]));
         } else if ((arg == "-d" || arg == "--data") && i + 1 < argc) {
             config.data_dir = argv[++i];
+        } else if (arg == "--node-id" && i + 1 < argc) {
+            config.node_id = static_cast<uint32_t>(std::stoi(argv[++i]));
+        } else if (arg == "--role" && i + 1 < argc) {
+            config.role = argv[++i];
         } else {
             std::cerr << "Unknown argument: " << arg << std::endl;
             printUsage(argv[0]);
@@ -99,11 +105,17 @@ int main(int argc, char *argv[]) {
     std::cout << "   KV Storage Engine Server" << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "Configuration:" << std::endl;
+    std::cout << "  Node ID:    " << config.node_id << std::endl;
+    std::cout << "  Role:       " << (config.role.empty() ? "standalone" : config.role) << std::endl;
     std::cout << "  Host:       " << config.host << std::endl;
     std::cout << "  Port:       " << config.port << std::endl;
     std::cout << "  Threads:    " << config.num_threads << std::endl;
     std::cout << "  Cache Size: " << config.cache_size << std::endl;
     std::cout << "  Data Dir:   " << config.data_dir << std::endl;
+    std::cout << "  Peers:      " << config.peers.size() << std::endl;
+    for (const auto &[host, port] : config.peers) {
+        std::cout << "    - " << host << ":" << port << std::endl;
+    }
     std::cout << "========================================" << std::endl;
 
     try {

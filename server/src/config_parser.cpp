@@ -3,46 +3,113 @@
 std::optional<kv::ServerConfig> kv::ConfigParser::load(const std::string &filepath) {
     std::ifstream file(filepath);
     if (!file.is_open()) {
+        std::cerr << "[ConfigParser] Failed to open: " << filepath << std::endl;
         return std::nullopt;
     }
 
     ServerConfig config;
     std::unordered_map<std::string, std::string> values;
-    std::string currentSection;
+    std::vector<std::pair<std::string, uint16_t>> peers;
 
+    std::string currentSection;
     std::string line;
+    bool inPeersSection = false;
+    bool inListItem = false;
+
+    std::string peerHost;
+    uint16_t peerPort = 0;
+
     while (std::getline(file, line)) {
         std::string trimmed = trim(line);
+
         if (trimmed.empty() || trimmed[0] == '#') {
             continue;
         }
 
-        bool isIndented = !line.empty() && (line[0] == ' ' || line[0] == '\t');
+        size_t indent = 0;
+        while (indent < line.size() && (line[indent] == ' ' || line[indent] == '\t')) {
+            indent++;
+        }
+
+        bool startsWithDash = (trimmed[0] == '-');
 
         size_t colonPos = trimmed.find(':');
         if (colonPos == std::string::npos) {
             continue;
         }
 
-        std::string key = trim(trimmed.substr(0, colonPos));
-        std::string value = trim(trimmed.substr(colonPos + 1));
+        std::string key, value;
+
+        if (startsWithDash) {
+            // New list item
+            std::string withoutDash = trim(trimmed.substr(1));
+            colonPos = withoutDash.find(':');
+            key = trim(withoutDash.substr(0, colonPos));
+            value = trim(withoutDash.substr(colonPos + 1));
+            inListItem = true;
+        } else {
+            key = trim(trimmed.substr(0, colonPos));
+            value = trim(trimmed.substr(colonPos + 1));
+        }
+
+        // Remove quotes
         if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
             value = value.substr(1, value.size() - 2);
         }
 
-        if (!isIndented) {
-            if (value.empty()) {
-                currentSection = key;
-            } else {
-                values[key] = value;
-                currentSection.clear();
+        if (!startsWithDash && value.empty() && indent == 0) {
+            // Save pending peer before changing sections
+            if (inPeersSection && !peerHost.empty() && peerPort != 0) {
+                peers.push_back({peerHost, peerPort});
+                peerHost.clear();
+                peerPort = 0;
             }
-        } else {
-            std::string fullKey = currentSection.empty() ? key : currentSection + "." + key;
+
+            currentSection = key;
+            inPeersSection = (key == "peers");
+            inListItem = false;
+            continue;
+        }
+
+        // Handle peer fields (either starts with dash OR is indented within a list item)
+        if (inPeersSection && (startsWithDash || (inListItem && indent > 2))) {
+            if (key == "host") {
+                // Save previous peer if complete
+                if (!peerHost.empty() && peerPort != 0) {
+                    peers.push_back({peerHost, peerPort});
+                }
+                peerHost = value;
+                peerPort = 0;
+            } else if (key == "port") {
+                peerPort = static_cast<uint16_t>(std::stoi(value));
+                // Complete the peer
+                if (!peerHost.empty()) {
+                    peers.push_back({peerHost, peerPort});
+                    peerHost.clear();
+                    peerPort = 0;
+                }
+            }
+            continue;
+        }
+
+        // Regular key-value pairs
+        if (!currentSection.empty() && !inPeersSection) {
+            std::string fullKey = currentSection + "." + key;
             values[fullKey] = value;
+        }
+
+        // Reset list item flag if we hit a new section-level key
+        if (indent == 0 && !startsWithDash) {
+            inListItem = false;
         }
     }
 
+    // Save final peer
+    if (!peerHost.empty() && peerPort != 0) {
+        peers.push_back({peerHost, peerPort});
+    }
+
+    // Parse config values
     if (auto it = values.find("server.host"); it != values.end()) {
         config.host = it->second;
     }
@@ -57,6 +124,20 @@ std::optional<kv::ServerConfig> kv::ConfigParser::load(const std::string &filepa
     }
     if (auto it = values.find("storage.cache_size"); it != values.end()) {
         config.cache_size = static_cast<size_t>(std::stoi(it->second));
+    }
+    if (auto it = values.find("node.id"); it != values.end()) {
+        config.node_id = static_cast<uint32_t>(std::stoi(it->second));
+    }
+    if (auto it = values.find("node.role"); it != values.end()) {
+        config.role = it->second;
+    }
+
+    config.peers = peers;
+
+    std::cout << "[ConfigParser] Loaded node " << config.node_id << " (" << config.role << ") with " << peers.size() << " peers"
+              << std::endl;
+    for (const auto &[host, port] : peers) {
+        std::cout << "[ConfigParser]   Peer: " << host << ":" << port << std::endl;
     }
 
     return config;

@@ -1,0 +1,21 @@
+node:
+  id: 2
+  role: "follower"
+
+server:
+  host: "127.0.0.1"
+  port: 9001
+  threads: 4
+
+peers:
+  - host: "127.0.0.1"
+    port: 9000
+  - host: "127.0.0.1"
+    port: 9002
+
+storage:
+  data_dir: "build/data2"
+  cache_size: 1000
+
+logging:
+  level: "info"
