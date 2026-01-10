@@ -22,6 +22,7 @@ add_executable(kv_server
 target_include_directories(kv_server
     PRIVATE
         include
+        ${CMAKE_SOURCE_DIR}/distributed/include
 )
 
 target_link_libraries(kv_server

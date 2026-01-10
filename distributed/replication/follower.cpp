@@ -30,7 +30,7 @@ void Follower::start() {
     addr.sin_port = htons(config_.replication_port);
     inet_pton(AF_INET, config_.host.c_str(), &addr.sin_addr);
 
-    if (bind(listen_fd_, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    if (bind(listen_fd_, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0) {
         close(listen_fd_);
         throw std::runtime_error("Failed to bind replication port");
     }
@@ -72,7 +72,7 @@ void Follower::listenerLoop() {
         struct sockaddr_in peer_addr{};
         socklen_t peer_len = sizeof(peer_addr);
 
-        int peer_fd = accept(listen_fd_, (struct sockaddr *)&peer_addr, &peer_len);
+        int peer_fd = accept(listen_fd_, reinterpret_cast<struct sockaddr *>(&peer_addr), &peer_len);
 
         if (peer_fd < 0) {
             if (shutdown_)

@@ -26,6 +26,7 @@ void Heartbeat::stop() {
     std::cout << "[Heartbeat] Stopped" << std::endl;
 }
 
+// cppcheck-suppress unusedFunction
 void Heartbeat::setSendCallback(SendCallback cb) {
     send_callback_ = cb;
 }

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <mutex>
 #include <vector>
+#include <algorithm>
 
 namespace distributed {
 
@@ -13,7 +14,7 @@ class LogShipper {
     explicit LogShipper(std::vector<PeerInfo> &peers);
     ~LogShipper();
 
-    void start();
+    static void start();
     void stop();
 
     // Ship entries to followers, returns number of successful acks
@@ -27,7 +28,7 @@ class LogShipper {
     mutable std::mutex peers_mutex_;
     std::atomic<bool> shutdown_{false};
 
-    bool sendToPeer(PeerInfo &peer, const std::string &data);
+    static bool sendToPeer(PeerInfo &peer, const std::string &data);
 };
 
 } // namespace distributed

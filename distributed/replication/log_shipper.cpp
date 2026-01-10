@@ -71,7 +71,7 @@ void LogShipper::connectToPeers() {
 
         std::cout << "[LogShipper] Attempting connect to " << peer.host << ":" << peer.port << std::endl;
 
-        if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        if (connect(sock, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0) {
             std::cerr << "[LogShipper] ✗ Connect failed to " << peer.host << ":" << peer.port << " - " << strerror(errno) << std::endl;
             close(sock);
             peer.socket_fd = -1;
@@ -84,11 +84,7 @@ void LogShipper::connectToPeers() {
         std::cout << "[LogShipper] ✓ Connected to " << peer.host << ":" << peer.port << " (fd=" << sock << ")" << std::endl;
     }
 
-    int connected_count = 0;
-    for (const auto &peer : peers_) {
-        if (peer.connected)
-            connected_count++;
-    }
+    int connected_count = std::count_if(peers_.begin(), peers_.end(), [](const PeerInfo &peer) { return peer.connected; });
     std::cout << "[LogShipper] Connection summary: " << connected_count << "/" << peers_.size() << " connected" << std::endl;
 }
 

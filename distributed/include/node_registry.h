@@ -4,6 +4,7 @@
 #include "replication_types.h"
 #include <mutex>
 #include <vector>
+#include <algorithm>
 
 namespace distributed {
 

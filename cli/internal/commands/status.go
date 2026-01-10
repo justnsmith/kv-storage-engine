@@ -25,7 +25,11 @@ var statusCmd = &cobra.Command{
 			formatter.PrintError(fmt.Sprintf("Failed to connect: %v", err))
 			os.Exit(1)
 		}
-		defer c.Close()
+		defer func() {
+			if err := c.Close(); err != nil {
+				formatter.PrintError(fmt.Sprintf("Failed to close client: %v", err))
+			}
+		}()
 
 		resp, err := c.Status()
 		if err != nil {

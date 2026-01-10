@@ -56,6 +56,7 @@ void ThreadPool::shutdown() {
     }
 }
 
+// cppcheck-suppress unusedFunction
 size_t ThreadPool::queueSize() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return tasks_.size();
@@ -148,10 +149,12 @@ void TcpServer::setSocketTimeout(int fd, int timeout_ms) {
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
+// cppcheck-suppress unusedFunction
 StorageEngine &TcpServer::engine() {
     return *engine_;
 }
 
+// cppcheck-suppress unusedFunction
 size_t TcpServer::activeConnections() const {
     return active_connections_.load();
 }
@@ -281,7 +284,7 @@ void TcpServer::handleClient(int client_fd) {
 Response TcpServer::executeCommand(const Request &req) {
     try {
         if (follower_ && (req.type == CommandType::PUT || req.type == CommandType::DELETE)) {
-            return Response::error("NOT_LEADER - Write to leader at " + std::to_string(config_.node_id == 2 ? 9000 : 9000));
+            return Response::error("NOT_LEADER - Write to leader at port 9000");
         }
         // If we're a leader, replicate writes
         if (leader_) {
