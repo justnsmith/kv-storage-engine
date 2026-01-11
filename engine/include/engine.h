@@ -35,7 +35,7 @@ class MemTable;
 
 class StorageEngine {
   public:
-    explicit StorageEngine(const std::string &wal_path, size_t cache_size = 1000);
+    explicit StorageEngine(const std::string &data_dir, size_t cache_size = 1000);
     ~StorageEngine();
     StorageEngine(const StorageEngine &) = delete;
     StorageEngine &operator=(const StorageEngine &) = delete;
@@ -59,6 +59,7 @@ class StorageEngine {
 
   private:
     // Core storage components
+    std::string data_dir_;
     WriteAheadLog wal_;
     MemTable memtable_;
     std::shared_ptr<MemTable> immutable_memtable_; // Immutable memtable being flushed (atomic access)

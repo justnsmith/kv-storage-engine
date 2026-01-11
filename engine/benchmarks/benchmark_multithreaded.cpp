@@ -269,7 +269,7 @@ int main() {
     std::vector<BenchmarkResult> write_results;
     for (size_t threads : thread_counts) {
         std::filesystem::remove_all("data");
-        StorageEngine engine("data/log.bin", 0);
+        StorageEngine engine("data", 0);
 
         auto result = benchmarkConcurrentWrites(engine, threads, ops_per_thread, value_size);
         write_results.push_back(result);
@@ -283,7 +283,7 @@ int main() {
     // Pre-populate data once
     {
         std::filesystem::remove_all("data");
-        StorageEngine engine("data/log.bin", 1000);
+        StorageEngine engine("data", 1000);
         std::mt19937 gen(42);
         for (size_t i = 0; i < total_keys; ++i) {
             std::string key = "key_" + std::to_string(i);
@@ -294,7 +294,7 @@ int main() {
 
     std::vector<BenchmarkResult> read_results;
     for (size_t threads : thread_counts) {
-        StorageEngine engine("data/log.bin", 1000);
+        StorageEngine engine("data", 1000);
         engine.recover();
 
         auto result = benchmarkConcurrentReads(engine, threads, ops_per_thread, total_keys);
@@ -309,7 +309,7 @@ int main() {
     std::vector<BenchmarkResult> mixed_results;
     for (size_t threads : thread_counts) {
         std::filesystem::remove_all("data");
-        StorageEngine engine("data/log.bin", 1000);
+        StorageEngine engine("data", 1000);
 
         // Pre-populate with half the keys
         std::mt19937 gen(42);
@@ -331,7 +331,7 @@ int main() {
     std::vector<BenchmarkResult> write_heavy_results;
     for (size_t threads : thread_counts) {
         std::filesystem::remove_all("data");
-        StorageEngine engine("data/log.bin", 1000);
+        StorageEngine engine("data", 1000);
 
         auto result = benchmarkMixedWorkload(engine, threads, ops_per_thread, value_size, total_keys, 20);
         write_heavy_results.push_back(result);

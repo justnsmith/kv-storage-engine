@@ -22,7 +22,7 @@ std::string generateRandomString(size_t length) {
 
 void benchmarkSequentialWrites(size_t num_ops, size_t value_size) {
     std::filesystem::remove_all("data");
-    StorageEngine engine("data/log.bin", 0);
+    StorageEngine engine("data", 0);
 
     // Pre-generate all keys and values
     std::vector<std::string> keys, values;
@@ -72,7 +72,7 @@ void benchmarkSequentialWrites(size_t num_ops, size_t value_size) {
 
 void benchmarkRandomWrites(size_t num_ops, size_t value_size) {
     std::filesystem::remove_all("data");
-    StorageEngine engine("data/log.bin", 0);
+    StorageEngine engine("data", 0);
 
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -124,7 +124,7 @@ void benchmarkRandomWrites(size_t num_ops, size_t value_size) {
 
 void benchmarkMixedWorkload(size_t num_ops, size_t value_size) {
     std::filesystem::remove_all("data");
-    StorageEngine engine("data/log.bin", 1000);
+    StorageEngine engine("data", 1000);
 
     // Pre-populate with some data
     for (size_t i = 0; i < num_ops / 2; ++i) {

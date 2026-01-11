@@ -33,7 +33,7 @@ BenchmarkResults benchmarkCompactionImpact() {
     std::cout << "=== Compaction Performance Impact ===\n\n";
 
     std::filesystem::remove_all("data");
-    StorageEngine engine("data/log.bin", 0);
+    StorageEngine engine("data", 0);
 
     const size_t NUM_KEYS = 5000;
     const size_t NUM_READS = 1000;
@@ -149,7 +149,7 @@ void benchmarkUpdateCompaction() {
     std::cout << "=== Update-Heavy Workload + Compaction ===\n\n";
 
     std::filesystem::remove_all("data");
-    StorageEngine engine("data/log.bin", 0);
+    StorageEngine engine("data", 0);
 
     const size_t NUM_KEYS = 5000;
     const size_t NUM_UPDATES = 10000;
@@ -223,7 +223,7 @@ void benchmarkDeletionCompaction() {
     std::cout << "=== Deletion + Compaction (Tombstone Removal) ===\n\n";
 
     std::filesystem::remove_all("data");
-    StorageEngine engine("data/log.bin", 0);
+    StorageEngine engine("data", 0);
 
     const size_t NUM_KEYS = 5000;
 

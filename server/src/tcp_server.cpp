@@ -94,9 +94,8 @@ void ThreadPool::workerLoop() {
 TcpServer::TcpServer(const ServerConfig &config) : config_(config), thread_pool_(std::make_unique<ThreadPool>(config.num_threads)) {
 
     // Initialize storage engine
-    std::string wal_path = config_.data_dir + "/wal.log";
-    engine_ = std::make_unique<StorageEngine>(wal_path, config_.cache_size);
-    std::cout << "[Server] Storage engine initialized" << std::endl;
+    engine_ = std::make_unique<StorageEngine>(config_.data_dir, config_.cache_size);
+    std::cout << "[Server] Storage engine initialized with data directory: " << config_.data_dir << std::endl;
 
     // Initialize distributed layer if configured
     if (config_.node_id > 0 && !config_.role.empty()) {

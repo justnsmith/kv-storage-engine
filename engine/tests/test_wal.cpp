@@ -8,18 +8,19 @@
 class WriteAheadLogTest {
   public:
     explicit WriteAheadLogTest(const std::string &path) : path_(path) {
-        wal_ = std::make_unique<WriteAheadLog>(path_);
     }
 
     void setUp() {
         wal_.reset();
 
         std::filesystem::path p(path_);
-        if (std::filesystem::exists(p)) {
-            std::filesystem::remove(p);
-        }
-        std::filesystem::create_directories(p.parent_path());
+        std::filesystem::path parent = p.parent_path();
 
+        if (std::filesystem::exists(parent)) {
+            std::filesystem::remove_all(parent); // ✅ Remove entire directory tree
+        }
+
+        std::filesystem::create_directories(parent);
         wal_ = std::make_unique<WriteAheadLog>(path_);
     }
 

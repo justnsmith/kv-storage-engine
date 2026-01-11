@@ -68,7 +68,7 @@ void printStats(const std::string &name, const LatencyStats &stats) {
 
 void benchmarkMemTableReads(size_t num_keys, size_t num_reads) {
     std::filesystem::remove_all("data");
-    StorageEngine engine("data/log.bin", 0);
+    StorageEngine engine("data", 0);
 
     // Insert data into memtable (without flushing)
     for (size_t i = 0; i < num_keys; ++i) {
@@ -102,7 +102,7 @@ void benchmarkMemTableReads(size_t num_keys, size_t num_reads) {
 
 void benchmarkSSTableReads(size_t num_keys, size_t num_reads) {
     std::filesystem::remove_all("data");
-    StorageEngine engine("data/log.bin", 0);
+    StorageEngine engine("data", 0);
 
     // Insert and flush to create SSTables
     for (size_t i = 0; i < num_keys; ++i) {
@@ -137,7 +137,7 @@ void benchmarkSSTableReads(size_t num_keys, size_t num_reads) {
 
 void benchmarkCachedReads(size_t num_keys, size_t num_reads) {
     std::filesystem::remove_all("data");
-    StorageEngine engine("data/log.bin", 1000);
+    StorageEngine engine("data", 1000);
 
     // Insert and flush
     for (size_t i = 0; i < num_keys; ++i) {
@@ -179,7 +179,7 @@ void benchmarkCachedReads(size_t num_keys, size_t num_reads) {
 
 void benchmarkNonExistentKeys(size_t num_keys, size_t num_reads) {
     std::filesystem::remove_all("data");
-    StorageEngine engine("data/log.bin", 0);
+    StorageEngine engine("data", 0);
 
     // Insert some data
     for (size_t i = 0; i < num_keys; ++i) {

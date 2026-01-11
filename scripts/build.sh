@@ -62,7 +62,6 @@ done
 if [ "$CLEAN_FIRST" = true ]; then
     print_info "Cleaning build directory first"
     rm -rf "$BUILD_DIR"
-    rm -rf "$ROOT_DIR/cli/bin"
 fi
 
 # Create build directory
@@ -76,7 +75,7 @@ build_go_cli() {
     print_header "Building Go CLI"
 
     local CLI_DIR="$ROOT_DIR/cli"
-    local BIN_DIR="$CLI_DIR/bin"
+    local OUTPUT_DIR="$BUILD_DIR/cli"
 
     if [ ! -d "$CLI_DIR" ]; then
         print_error "CLI directory not found: $CLI_DIR"
@@ -91,16 +90,16 @@ build_go_cli() {
 
     print_info "Go version: $(go version)"
 
-    # Create bin directory
-    mkdir -p "$BIN_DIR"
+    # Create output directory in build folder
+    mkdir -p "$OUTPUT_DIR"
 
     # Build the CLI
     print_info "Building kvstore-cli..."
-    if (cd "$CLI_DIR" && go build -o "$BIN_DIR/kvstore-cli" ./cmd/main.go); then
+    if (cd "$CLI_DIR" && go build -o "$OUTPUT_DIR/kvstore-cli" ./cmd/main.go); then
         print_success "Go CLI built successfully!"
         echo ""
         echo "Executable:"
-        echo "  CLI: $BIN_DIR/kvstore-cli"
+        echo "  CLI: $OUTPUT_DIR/kvstore-cli"
         return 0
     else
         print_error "Go CLI build failed"
@@ -194,7 +193,7 @@ case "$TARGET" in
         echo "  Engine:      $BUILD_DIR/engine/kv_engine"
         echo "  Server:      $BUILD_DIR/server/kv_server"
         echo "  Tests:       $BUILD_DIR/engine/kv_engine_tests"
-        echo "  Go CLI:      $ROOT_DIR/cli/bin/kvstore-cli"
+        echo "  Go CLI:      $BUILD_DIR/cli/kvstore-cli"
         echo ""
         echo "Libraries:"
         echo "  Engine:      $BUILD_DIR/engine/libkv_engine_core.a"

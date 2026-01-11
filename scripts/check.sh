@@ -98,6 +98,7 @@ if [ "$FORMAT_ONLY" = false ] && [ "$CHECK_CPP" = true ]; then
         --suppress=checkersReport
         --suppress=functionConst
         --suppress=normalCheckLevelMaxBranches
+        --suppress=unmatchedSuppression
         --inline-suppr
     )
 

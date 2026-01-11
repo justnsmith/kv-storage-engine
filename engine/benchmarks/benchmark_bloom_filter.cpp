@@ -66,7 +66,7 @@ void benchmarkWithAndWithoutBloomFilter() {
 
     // Setup: Create database with many non-existent key lookups
     std::filesystem::remove_all("data");
-    StorageEngine engine("data/log.bin", 0);
+    StorageEngine engine("data", 0);
 
     std::cout << "Setting up database with " << NUM_KEYS << " keys...\n";
     for (size_t i = 0; i < NUM_KEYS; ++i) {

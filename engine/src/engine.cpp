@@ -1,17 +1,18 @@
 #include "engine.h"
 
-StorageEngine::StorageEngine(const std::string &wal_path, size_t cache_size) : wal_(wal_path), memtable_(), seq_number_(1) {
+StorageEngine::StorageEngine(const std::string &data_dir, size_t cache_size)
+    : data_dir_(data_dir), wal_(data_dir + "/log.bin"), memtable_(), seq_number_(1) {
     if (cache_size > 0) {
         cache_.emplace(cache_size);
     }
 
     try {
-        std::filesystem::create_directories("data/sstables");
+        std::filesystem::create_directories(data_dir_ + "/sstables");
     } catch (const std::filesystem::filesystem_error &e) {
         std::cerr << "Filesystem error: " << e.what() << std::endl;
     }
 
-    std::ifstream metadataFile("data/metadata.txt");
+    std::ifstream metadataFile(data_dir_ + "/metadata.txt");
 
     if (!metadataFile) {
         flush_counter_ = 0;
@@ -29,6 +30,8 @@ StorageEngine::StorageEngine(const std::string &wal_path, size_t cache_size) : w
         loadLevelMetadata();
         loadSSTables();
     }
+
+    recover();
 
     flush_thread_ = std::thread(&StorageEngine::flushThreadLoop, this);
     writer_thread_ = std::thread(&StorageEngine::writerThreadLoop, this);
@@ -66,7 +69,7 @@ StorageEngine::~StorageEngine() {
 void StorageEngine::loadLevelMetadata() {
     auto newVersion = std::make_shared<TableVersion>();
 
-    std::ifstream levelFile("data/levels.txt");
+    std::ifstream levelFile(data_dir_ + "/levels.txt");
     if (!levelFile) {
         newVersion->levels.resize(4);
         version_manager_.installVersion(newVersion);
@@ -103,7 +106,7 @@ void StorageEngine::loadSSTables() {
 
     for (const auto &levelMetas : newVersion->levels) {
         for (const auto &meta : levelMetas) {
-            std::string path = "data/sstables/sstable_" + std::to_string(meta.id) + ".bin";
+            std::string path = data_dir_ + "/sstables/sstable_" + std::to_string(meta.id) + ".bin";
             if (std::filesystem::exists(path)) {
                 newVersion->sstables.push_back(std::make_shared<SSTable>(path));
             } else {
@@ -361,7 +364,7 @@ void StorageEngine::checkFlush(bool debug) {
 
         flush_cv_.notify_one();
 
-        std::remove("data/log.bin");
+        std::remove((data_dir_ + "/log.bin").c_str());
     }
 }
 
@@ -394,7 +397,7 @@ void StorageEngine::flushThreadLoop() {
             std::map<std::string, Entry> snapshot = memtable_to_flush->snapshot();
 
             if (!snapshot.empty()) {
-                const std::string dir_path = "data/sstables/";
+                const std::string dir_path = data_dir_ + "/sstables/";
                 uint64_t new_flush_counter;
                 {
                     std::lock_guard<std::mutex> lock(metadata_mutex_);
@@ -468,7 +471,7 @@ void StorageEngine::clearData() {
     }
 
     try {
-        std::filesystem::create_directories("data/sstables");
+        std::filesystem::create_directories(data_dir_ + "/sstables");
     } catch (const std::filesystem::filesystem_error &e) {
     }
 }
@@ -612,7 +615,7 @@ bool StorageEngine::shouldCompactUnlocked(uint32_t level, const std::shared_ptr<
 void StorageEngine::saveMetadata() {
     auto version = version_manager_.getCurrentVersion();
 
-    std::ofstream metadataFile("data/metadata.txt");
+    std::ofstream metadataFile(data_dir_ + "/metadata.txt");
     if (!metadataFile) {
         std::cerr << "Error: Could not open metadata.txt" << '\n';
         return;
@@ -622,7 +625,7 @@ void StorageEngine::saveMetadata() {
     metadataFile << seq_number_ << '\n';
     metadataFile.close();
 
-    std::ofstream levelFile("data/levels.txt");
+    std::ofstream levelFile(data_dir_ + "/levels.txt");
     if (!levelFile) {
         std::cerr << "Error could not open levels.txt" << '\n';
         return;
@@ -643,7 +646,7 @@ void StorageEngine::compactL0toL1() {
     if (oldVersion->levels.empty() || oldVersion->levels[0].empty())
         return;
 
-    const std::string dir_path = "data/sstables/";
+    const std::string dir_path = data_dir_ + "/sstables/";
 
     std::string minKey = oldVersion->levels[0][0].minKey;
     std::string maxKey = oldVersion->levels[0][0].maxKey;
@@ -784,7 +787,7 @@ void StorageEngine::compactL0toL1() {
     }
 
     for (uint64_t id : idsToRemove) {
-        std::filesystem::remove("data/sstables/sstable_" + std::to_string(id) + ".bin");
+        std::filesystem::remove(data_dir_ + "/sstables/sstable_" + std::to_string(id) + ".bin");
     }
 
     if (cache_) {
@@ -801,7 +804,7 @@ void StorageEngine::compactlevelN(uint32_t level) {
     if (oldVersion->levels[level].empty())
         return;
 
-    const std::string dir_path = "data/sstables/";
+    const std::string dir_path = data_dir_ + "/sstables/";
 
     const SSTableMeta &srcMeta = oldVersion->levels[level][0];
     auto srcSSTable = oldVersion->findSSTableById(srcMeta.id);
@@ -933,7 +936,7 @@ void StorageEngine::compactlevelN(uint32_t level) {
     }
 
     for (uint64_t id : idsToRemove) {
-        std::filesystem::remove("data/sstables/sstable_" + std::to_string(id) + ".bin");
+        std::filesystem::remove(data_dir_ + "/sstables/sstable_" + std::to_string(id) + ".bin");
     }
 
     if (cache_) {

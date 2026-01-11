@@ -14,7 +14,7 @@ class StorageEngineTest {
     void setUp() {
         tearDown();
 
-        engine_ = std::make_unique<StorageEngine>("data/log.bin");
+        engine_ = std::make_unique<StorageEngine>("data");
     }
 
     void tearDown() {
