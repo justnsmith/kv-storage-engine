@@ -46,8 +46,20 @@ echo ""
 cd "$DOCKER_DIR"
 TIMER=$(start_timer)
 
+# Detect docker-compose command (V1 vs V2)
+if command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+elif docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+else
+    print_error "Neither 'docker-compose' nor 'docker compose' found"
+    exit 1
+fi
+
+print_info "Using: $DOCKER_COMPOSE"
+
 # Use docker-compose to build all services
-if docker-compose build $NO_CACHE $PROGRESS; then
+if $DOCKER_COMPOSE build $NO_CACHE $PROGRESS; then
     ELAPSED=$(get_elapsed_time $TIMER)
     echo ""
     print_success "Docker images built successfully in $(format_duration $ELAPSED)!"

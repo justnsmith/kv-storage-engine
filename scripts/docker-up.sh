@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 DOCKER_DIR="$ROOT_DIR/docker"
-
 cd "$DOCKER_DIR"
+
+# Detect docker-compose command (V1 vs V2)
+if command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+elif docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+else
+    print_error "Neither 'docker-compose' nor 'docker compose' found"
+    exit 1
+fi
 
 print_header "Starting KV Store Cluster"
 
-if docker-compose up -d; then
+if $DOCKER_COMPOSE up -d; then
     echo ""
     print_success "Cluster started!"
     echo ""
     print_step "Cluster status:"
-    docker-compose ps
-
+    $DOCKER_COMPOSE ps
     echo ""
     print_info "Node endpoints:"
     echo "  Leader:     http://localhost:9000"

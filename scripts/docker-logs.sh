@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 DOCKER_DIR="$ROOT_DIR/docker"
-
 cd "$DOCKER_DIR"
+
+# Detect docker-compose command (V1 vs V2)
+if command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+elif docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+else
+    print_error "Neither 'docker-compose' nor 'docker compose' found"
+    exit 1
+fi
 
 show_usage() {
     echo "Usage: $0 [NODE] [OPTIONS]"
@@ -51,19 +59,19 @@ done
 case "$NODE" in
     1|leader)
         print_info "Following logs for node 1 (leader)..."
-        docker-compose logs $FOLLOW $LINES kv-node-1
+        $DOCKER_COMPOSE logs $FOLLOW $LINES kv-node-1
         ;;
     2|follower1)
         print_info "Following logs for node 2 (follower 1)..."
-        docker-compose logs $FOLLOW $LINES kv-node-2
+        $DOCKER_COMPOSE logs $FOLLOW $LINES kv-node-2
         ;;
     3|follower2)
         print_info "Following logs for node 3 (follower 2)..."
-        docker-compose logs $FOLLOW $LINES kv-node-3
+        $DOCKER_COMPOSE logs $FOLLOW $LINES kv-node-3
         ;;
     all)
         print_info "Following logs for all nodes (Ctrl+C to exit)..."
-        docker-compose logs $FOLLOW $LINES
+        $DOCKER_COMPOSE logs $FOLLOW $LINES
         ;;
     *)
         print_error "Unknown node: $NODE"

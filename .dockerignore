@@ -1,17 +1,25 @@
 # Build artifacts
 build/
 **/build/
+build-*/
+cmake-build-*/
 CMakeCache.txt
 **/CMakeCache.txt
 CMakeFiles/
 **/CMakeFiles/
+*.cmake
+compile_commands.json
 
 # Data directories
 data/
 **/data*/
+*.db
+*.wal
+*.sst
 
 # CLI binary
 cli/bin/
+cli/vendor/
 
 # Git
 .git/
@@ -40,5 +48,12 @@ terraform/
 docker/
 !docker/configs/
 
-# Logs
+# Logs and temp files
 *.log
+*.tmp
+tmp/
+.cache/
+
+# OS files
+Thumbs.db
+EOF

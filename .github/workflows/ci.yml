@@ -10,6 +10,7 @@ jobs:
   ci:
     name: Build, Test & Lint
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,7 +40,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.25.5'
+          go-version: '1.23.5'
 
       - name: Install golangci-lint
         run: |
@@ -48,3 +49,100 @@ jobs:
 
       - name: Run C++ CI script
         run: ./scripts/ci.sh --skip-format
+
+  docker:
+    name: Docker Build & Integration Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install Go (for CLI build in Docker)
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23.5'
+
+      - name: Build Docker images
+        run: ./scripts/docker-build.sh --no-cache
+
+      - name: Start cluster
+        run: ./scripts/docker-up.sh
+
+      - name: Wait for cluster initialization
+        run: sleep 10
+
+      - name: Check cluster status
+        run: |
+          # Check if all containers are running
+          RUNNING=$(docker compose -f docker/docker-compose.yml ps --filter "status=running" --format "{{.Names}}" | wc -l)
+          echo "Running containers: $RUNNING/3"
+          if [ "$RUNNING" -ne 3 ]; then
+            echo "❌ Not all containers are running"
+            docker compose -f docker/docker-compose.yml ps
+            exit 1
+          fi
+          echo "✓ All containers are running"
+
+      - name: Verify node connectivity
+        run: |
+          # Check leader logs for successful connections
+          echo "Checking leader logs for peer connections..."
+          docker logs kv-leader 2>&1 | tail -50
+
+          CONNECTED=$(docker logs kv-leader 2>&1 | grep -c "Connection summary: 2/2 connected" || true)
+          if [ "$CONNECTED" -gt 0 ]; then
+            echo "✓ Leader successfully connected to 2/2 followers"
+          else
+            echo "❌ Leader failed to connect to followers"
+            echo ""
+            echo "=== Leader Logs ==="
+            docker logs kv-leader 2>&1
+            echo ""
+            echo "=== Follower 1 Logs ==="
+            docker logs kv-follower-1 2>&1
+            echo ""
+            echo "=== Follower 2 Logs ==="
+            docker logs kv-follower-2 2>&1
+            exit 1
+          fi
+
+      - name: Test basic operations
+        run: |
+          # Wait a bit more to ensure everything is stable
+          sleep 5
+
+          # Test ping (should work on all nodes)
+          echo "Testing PING on leader..."
+          echo "PING" | nc -w 1 localhost 9000 || echo "Leader ping failed"
+
+          echo "Testing PING on follower 1..."
+          echo "PING" | nc -w 1 localhost 9001 || echo "Follower 1 ping failed"
+
+          echo "Testing PING on follower 2..."
+          echo "PING" | nc -w 1 localhost 9002 || echo "Follower 2 ping failed"
+
+          # Test write to leader
+          echo "Testing PUT on leader..."
+          echo "PUT test_key test_value" | nc -w 1 localhost 9000
+
+          # Give replication time to propagate
+          sleep 2
+
+          # Test read from followers (should have replicated data)
+          echo "Testing GET on follower 1..."
+          echo "GET test_key" | nc -w 1 localhost 9001
+
+          echo "Testing GET on follower 2..."
+          echo "GET test_key" | nc -w 1 localhost 9002
+
+      - name: Show cluster logs on failure
+        if: failure()
+        run: ./scripts/docker-logs.sh
+
+      - name: Stop cluster
+        if: always()
+        run: ./scripts/docker-down.sh

@@ -8,6 +8,16 @@ cd "$DOCKER_DIR"
 CLEAN=false
 REMOVE_IMAGES=false
 
+# Detect docker-compose command (V1 vs V2)
+if command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+elif docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+else
+    print_error "Neither 'docker-compose' nor 'docker compose' found"
+    exit 1
+fi
+
 show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -40,16 +50,16 @@ for arg in "$@"; do
 done
 
 print_info "Stopping KV Store cluster..."
-docker-compose down
+$DOCKER_COMPOSE down
 
 if [ "$CLEAN" = true ]; then
     print_warning "Removing data volumes..."
-    docker-compose down -v
+    $DOCKER_COMPOSE down -v
 fi
 
 if [ "$REMOVE_IMAGES" = true ]; then
     print_warning "Removing Docker images..."
-    docker-compose down --rmi local
+    $DOCKER_COMPOSE down --rmi local
     docker rmi docker-kv-node-1 docker-kv-node-2 docker-kv-node-3 2>/dev/null || true
 fi
 
