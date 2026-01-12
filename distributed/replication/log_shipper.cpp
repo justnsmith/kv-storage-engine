@@ -2,6 +2,7 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <iostream>
+#include <netdb.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -38,6 +39,10 @@ void LogShipper::connectToPeers() {
 
     std::cout << "[LogShipper] Attempting to connect to " << peers_.size() << " peers..." << std::endl;
 
+    for (size_t i = 0; i < peers_.size(); i++) {
+        std::cout << "[LogShipper] DEBUG: Peer " << i << " = " << peers_[i].host << ":" << peers_[i].port << std::endl;
+    }
+
     for (auto &peer : peers_) {
         if (peer.connected && peer.socket_fd >= 0) {
             std::cout << "[LogShipper] Peer " << peer.host << ":" << peer.port << " already connected (fd=" << peer.socket_fd << ")"
@@ -59,25 +64,33 @@ void LogShipper::connectToPeers() {
         setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
-        struct sockaddr_in addr;
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(peer.port);
+        struct addrinfo hints, *result;
+        std::memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET; // IPv4
+        hints.ai_socktype = SOCK_STREAM;
 
-        if (inet_pton(AF_INET, peer.host.c_str(), &addr.sin_addr) <= 0) {
-            std::cerr << "[LogShipper] Invalid address: " << peer.host << std::endl;
+        std::string port_str = std::to_string(peer.port);
+        int status = getaddrinfo(peer.host.c_str(), port_str.c_str(), &hints, &result);
+
+        if (status != 0) {
+            std::cerr << "[LogShipper] Failed to resolve " << peer.host << ": " << gai_strerror(status) << std::endl;
             close(sock);
             continue;
         }
 
         std::cout << "[LogShipper] Attempting connect to " << peer.host << ":" << peer.port << std::endl;
 
-        if (connect(sock, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0) {
+        // Try to connect using the resolved address
+        if (connect(sock, result->ai_addr, result->ai_addrlen) < 0) {
             std::cerr << "[LogShipper] ✗ Connect failed to " << peer.host << ":" << peer.port << " - " << strerror(errno) << std::endl;
+            freeaddrinfo(result);
             close(sock);
             peer.socket_fd = -1;
             peer.connected = false;
             continue;
         }
+
+        freeaddrinfo(result);
 
         peer.socket_fd = sock;
         peer.connected = true;

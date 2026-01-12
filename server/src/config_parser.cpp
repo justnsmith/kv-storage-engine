@@ -131,6 +131,9 @@ std::optional<kv::ServerConfig> kv::ConfigParser::load(const std::string &filepa
     if (auto it = values.find("node.role"); it != values.end()) {
         config.role = it->second;
     }
+    if (auto it = values.find("replication.port"); it != values.end()) {
+        config.replication_port = static_cast<uint16_t>(std::stoi(it->second));
+    }
 
     config.peers = peers;
 

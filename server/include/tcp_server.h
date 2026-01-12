@@ -50,6 +50,7 @@ struct ServerConfig {
     // Replication config
     uint32_t node_id = 0;
     std::string role;
+    uint16_t replication_port = 0;
     std::vector<std::pair<std::string, uint16_t>> peers;
 };
 

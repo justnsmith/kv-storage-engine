@@ -102,16 +102,17 @@ TcpServer::TcpServer(const ServerConfig &config) : config_(config), thread_pool_
         distributed::ReplicationConfig repl_config;
         repl_config.node_id = config_.node_id;
         repl_config.host = config_.host;
-        repl_config.replication_port = config_.port + 100;
+        repl_config.replication_port = config_.replication_port;
 
         // Build peer list
         for (const auto &[host, port] : config_.peers) {
             distributed::PeerInfo peer;
             peer.host = host;
-            peer.port = port + 100; // Replication port
+            peer.port = port;
             peer.socket_fd = -1;
             peer.connected = false;
             repl_config.peers.push_back(peer);
+            std::cout << "[Server] Added peer: " << host << ":" << port << std::endl; // ADD THIS
         }
 
         if (config_.role == "leader") {
