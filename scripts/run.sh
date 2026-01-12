@@ -12,6 +12,15 @@ show_usage() {
     echo "  cli          Run the Go CLI"
     echo "  tests        Run engine tests"
     echo "  benchmark    Run a specific benchmark"
+    echo "  cluster      Run the local 3-node cluster"
+    echo ""
+    echo "Docker Targets:"
+    echo "  docker:build     Build Docker image (--no-cache, --plain)"
+    echo "  docker:up        Start Docker cluster"
+    echo "  docker:down      Stop Docker cluster (--clean, --remove-images)"
+    echo "  docker:logs      View Docker logs"
+    echo "  docker:rebuild   Stop, clean rebuild, and start"
+    echo "  docker:clean     Complete cleanup (stop, remove data & images)"
     echo ""
     echo "Options:"
     echo "  --help, -h          Show this help message"
@@ -19,6 +28,12 @@ show_usage() {
     echo "  --valgrind          Run with valgrind memory checking (C++ only)"
     echo "  --gdb               Run with gdb debugger (C++ only)"
     echo "  --benchmark NAME    Run specific benchmark (use with 'benchmark' target)"
+    echo ""
+    echo "Docker Options (pass after target):"
+    echo "  docker:build --no-cache    Force clean rebuild"
+    echo "  docker:build --plain       Show detailed build output"
+    echo "  docker:down --clean        Remove data volumes"
+    echo "  docker:down --remove-images Remove Docker images"
     echo ""
     echo "Pass arguments after '--' to forward them to the target program"
     echo ""
@@ -29,6 +44,11 @@ show_usage() {
     echo "  $0 cli --build -- --host localhost --port 5555 ping"
     echo "  $0 tests --valgrind"
     echo "  $0 benchmark --benchmark bloom_filter"
+    echo "  $0 cluster"
+    echo "  $0 docker:build --no-cache"
+    echo "  $0 docker:down --clean --remove-images"
+    echo "  $0 docker:rebuild"
+    echo "  $0 docker:logs -- 1"
 }
 
 # Parse arguments
@@ -41,39 +61,73 @@ EXTRA_ARGS=()
 
 shift || true
 
-# Parse options until we hit '--' or run out
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --help|-h)
-            show_usage
-            exit 0
-            ;;
-        --build)
-            BUILD_FIRST=true
-            ;;
-        --valgrind)
-            USE_VALGRIND=true
-            ;;
-        --gdb)
-            USE_GDB=true
-            ;;
-        --benchmark)
-            shift
-            BENCHMARK_NAME="$1"
-            ;;
-        --)
-            shift
-            EXTRA_ARGS=("$@")
-            break
-            ;;
-        *)
-            print_error "Unknown option: $1"
-            show_usage
-            exit 1
-            ;;
-    esac
-    shift
-done
+# For Docker commands, collect all remaining args
+# They'll be passed directly to the docker scripts
+if [[ "$TARGET" == docker:* ]] || [[ "$TARGET" == docker-* ]]; then
+    EXTRA_ARGS=("$@")
+else
+    # Parse options until we hit '--' or run out
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                show_usage
+                exit 0
+                ;;
+            --build)
+                BUILD_FIRST=true
+                ;;
+            --valgrind)
+                USE_VALGRIND=true
+                ;;
+            --gdb)
+                USE_GDB=true
+                ;;
+            --benchmark)
+                shift
+                BENCHMARK_NAME="$1"
+                ;;
+            --)
+                shift
+                EXTRA_ARGS=("$@")
+                break
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                show_usage
+                exit 1
+                ;;
+        esac
+        shift
+    done
+fi
+
+# Handle Docker targets
+case "$TARGET" in
+    docker:build|docker-build)
+        exec "$SCRIPT_DIR/docker-build.sh" "${EXTRA_ARGS[@]}"
+        ;;
+    docker:up|docker-up)
+        exec "$SCRIPT_DIR/docker-up.sh" "${EXTRA_ARGS[@]}"
+        ;;
+    docker:down|docker-down)
+        exec "$SCRIPT_DIR/docker-down.sh" "${EXTRA_ARGS[@]}"
+        ;;
+    docker:logs|docker-logs)
+        exec "$SCRIPT_DIR/docker-logs.sh" "${EXTRA_ARGS[@]}"
+        ;;
+    docker:rebuild)
+        print_header "Rebuilding Docker Images (No Cache)"
+        "$SCRIPT_DIR/docker-down.sh"
+        exec "$SCRIPT_DIR/docker-build.sh" --no-cache "${EXTRA_ARGS[@]}"
+        ;;
+    docker:clean)
+        print_header "Complete Docker Cleanup"
+        exec "$SCRIPT_DIR/docker-down.sh" --clean --remove-images
+        ;;
+    cluster)
+        exec "$SCRIPT_DIR/run_cluster.sh"
+        ;;
+esac
 
 # Build if requested
 if [ "$BUILD_FIRST" = true ]; then
@@ -88,7 +142,7 @@ fi
 
 # Handle Go CLI target
 if [ "$TARGET" = "cli" ]; then
-    CLI_EXECUTABLE="$ROOT_DIR/cli/bin/kvstore-cli"
+    CLI_EXECUTABLE="$BUILD_DIR/cli/kvstore-cli"
 
     # Check if executable exists
     if [ ! -f "$CLI_EXECUTABLE" ]; then
