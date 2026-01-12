@@ -1,0 +1,24 @@
+node:
+  id: 2
+  role: "follower"
+
+server:
+  host: "0.0.0.0"
+  port: 9001
+  threads: 4
+
+replication:
+  port: 9101
+
+peers:
+  - host: "kv-node-1"
+    port: 9100
+  - host: "kv-node-3"
+    port: 9102
+
+storage:
+  data_dir: "/app/data"
+  cache_size: 1000
+
+logging:
+  level: "info"

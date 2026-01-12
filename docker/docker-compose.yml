@@ -1,0 +1,79 @@
+services:
+  kv-node-1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: kv-leader
+    hostname: kv-node-1
+    ports:
+      - "9000:9000"
+      - "9100:9100"
+    volumes:
+      - node1-data:/app/data
+      - ./configs/server1.yaml:/app/config/server.yaml:ro
+    command: ["/app/kv_server", "-f", "/app/config/server.yaml"]
+    networks:
+      kv-network:
+        ipv4_address: 172.25.0.10
+    environment:
+      - NODE_ID=1
+      - NODE_ROLE=leader
+    restart: unless-stopped
+
+  kv-node-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: kv-follower-1
+    hostname: kv-node-2
+    ports:
+      - "9001:9001"
+      - "9101:9101"
+    volumes:
+      - node2-data:/app/data
+      - ./configs/server2.yaml:/app/config/server.yaml:ro
+    command: ["/app/kv_server", "-f", "/app/config/server.yaml"]
+    networks:
+      kv-network:
+        ipv4_address: 172.25.0.11
+    environment:
+      - NODE_ID=2
+      - NODE_ROLE=follower
+    depends_on:
+      - kv-node-1
+    restart: unless-stopped
+
+  kv-node-3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: kv-follower-2
+    hostname: kv-node-3
+    ports:
+      - "9002:9002"
+      - "9102:9102"
+    volumes:
+      - node3-data:/app/data
+      - ./configs/server3.yaml:/app/config/server.yaml:ro
+    command: ["/app/kv_server", "-f", "/app/config/server.yaml"]
+    networks:
+      kv-network:
+        ipv4_address: 172.25.0.12
+    environment:
+      - NODE_ID=3
+      - NODE_ROLE=follower
+    depends_on:
+      - kv-node-1
+    restart: unless-stopped
+
+networks:
+  kv-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:

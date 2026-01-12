@@ -1,0 +1,44 @@
+# Build artifacts
+build/
+**/build/
+CMakeCache.txt
+**/CMakeCache.txt
+CMakeFiles/
+**/CMakeFiles/
+
+# Data directories
+data/
+**/data*/
+
+# CLI binary
+cli/bin/
+
+# Git
+.git/
+.github/
+.gitignore
+
+# Documentation
+*.md
+README*
+LICENSE
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Terraform
+terraform/
+*.tfstate
+*.tfstate.backup
+
+# Docker itself
+docker/
+!docker/configs/
+
+# Logs
+*.log
