@@ -1,4 +1,4 @@
-# Distributed Key-Value Store
+# LSM-Based Distributed Key-Value Store
 
 A high-performance, distributed key-value storage system with LSM-tree architecture, write-ahead logging, and leader-follower replication. Built from scratch in C++ and Go, deployable to AWS EC2.
 
