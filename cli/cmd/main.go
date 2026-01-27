@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/justnsmith/kv-store/cli/internal/commands"
+	"github.com/justnsmith/distributed-kv-storage/cli/internal/commands"
 )
 
 func main() {

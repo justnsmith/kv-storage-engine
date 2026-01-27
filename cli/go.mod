@@ -1,4 +1,4 @@
-module github.com/justnsmith/kv-store/cli
+module github.com/justnsmith/distributed-kv-storage/cli
 
 go 1.23.0
 

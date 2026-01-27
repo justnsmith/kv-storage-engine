@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/justnsmith/kv-store/cli/internal/client"
+	"github.com/justnsmith/distributed-kv-storage/cli/internal/client"
 	"github.com/spf13/cobra"
 )
 
